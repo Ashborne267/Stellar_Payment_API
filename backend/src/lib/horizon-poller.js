@@ -33,6 +33,12 @@ import {
   findAnyRecentPayment,
   verifyTransactionSignature,
 } from "./stellar.js";
+import {
+  validatePaymentRecord,
+  sanitizePaymentMetadata,
+  auditPaymentAnomaly,
+  isValidTransactionHash,
+} from "./ledger-monitor-security.js";
 import { sendWebhook, isEventSubscribed } from "./webhooks.js";
 import { sendReceiptEmail } from "./email.js";
 import { renderReceiptEmail } from "./email-templates.js";
@@ -304,15 +310,19 @@ async function pollPendingPayments() {
 
 async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
   try {
-    // Guard: skip if essential fields are missing
-    if (!payment.asset || !payment.recipient) {
+    // Guard: full security validation on the DB record before touching Horizon
+    const validation = validatePaymentRecord(payment);
+    if (!validation.valid) {
       logger.warn(
-        { paymentId: payment.id },
-        "Horizon poller: skipping payment with missing asset or recipient",
+        { paymentId: payment?.id, reason: validation.reason },
+        "Horizon poller: payment record failed security validation — skipping",
       );
       ledgerMonitorPaymentsChecked.inc({ result: "skipped" });
       return;
     }
+
+    // Emit audit event for any anomalous field values
+    auditPaymentAnomaly(payment);
 
     let match;
     try {
@@ -384,13 +394,13 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
             () => supabase.from("payments").update({
               status: "failed",
               tx_id: anyPayment.transaction_hash,
-              metadata: {
+              metadata: sanitizePaymentMetadata({
                 ...(payment.metadata || {}),
                 failure_reason: "underpayment",
                 expected_amount: expected,
                 received_amount: received,
                 shortfall: Number((expected - received).toFixed(7)),
-              },
+              }),
             }).eq("id", payment.id).eq("status", "pending"),
             { paymentId: payment.id, operation: "markUnderpaymentFailed" },
           );
@@ -424,13 +434,13 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
               status: "confirmed",
               tx_id: anyPayment.transaction_hash,
               completion_duration_seconds: Math.floor(latencySeconds),
-              metadata: {
+              metadata: sanitizePaymentMetadata({
                 ...(payment.metadata || {}),
                 overpayment: true,
                 expected_amount: expected,
                 received_amount: received,
                 excess: Number((received - expected).toFixed(7)),
-              },
+              }),
             }).eq("id", payment.id).eq("status", "pending").is("tx_id", null).select("id").maybeSingle(),
             { paymentId: payment.id, operation: "confirmOverpayment" },
           );
@@ -457,6 +467,16 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
           }
         }
       }
+      return;
+    }
+
+    // Guard: validate the transaction hash returned from Horizon before using it
+    if (!isValidTransactionHash(match.transaction_hash)) {
+      logger.warn(
+        { paymentId: payment.id, txHash: match.transaction_hash },
+        "Horizon poller: Horizon returned an invalid transaction hash — skipping",
+      );
+      ledgerMonitorPaymentsChecked.inc({ result: "skipped" });
       return;
     }
 
