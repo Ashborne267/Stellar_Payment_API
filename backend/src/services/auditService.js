@@ -7,6 +7,7 @@ import {
   sanitizeAuditValue,
   signAuditPayload,
   validateAuditAction,
+  verifyAuditSignature,
 } from "../lib/audit-security.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -144,7 +145,7 @@ export const auditService = {
     // Single query: window function returns the full-table count alongside
     // each row, eliminating the separate COUNT(*) round-trip (issue #770).
     const result = await pool.query(
-      `SELECT id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp,
+      `SELECT id, merchant_id, action, status, field_changed, old_value, new_value, ip_address, user_agent, timestamp, payload_hash, signature,
               COUNT(*) OVER() AS total_count
        FROM audit_logs
        WHERE merchant_id = $1
@@ -154,8 +155,57 @@ export const auditService = {
     );
 
     const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
-    // Strip the synthetic total_count column from each returned row
-    const logs = result.rows.map(({ total_count: _tc, ...row }) => row);
+    // Strip the synthetic total_count column from each returned row and verify integrity
+    const logs = result.rows.map(({ total_count: _tc, ...row }) => {
+      const isLogin = row.action === "login";
+      const payload = isLogin
+        ? {
+            merchant_id: row.merchant_id || merchantId || null,
+            action: row.action,
+            status: row.status || null,
+            ip_address: row.ip_address || null,
+            user_agent: row.user_agent || null,
+            event_type: "login_attempt",
+          }
+        : {
+            merchant_id: row.merchant_id || merchantId || null,
+            action: row.action,
+            field_changed: row.field_changed || null,
+            old_value: row.old_value || null,
+            new_value: row.new_value || null,
+            ip_address: row.ip_address || null,
+            user_agent: row.user_agent || null,
+          };
+
+      let hash_verified = null;
+      let signature_verified = null;
+
+      if (row.payload_hash) {
+        const calculatedHash = hashAuditPayload(payload);
+        hash_verified = calculatedHash === row.payload_hash;
+        if (!hash_verified) {
+          console.error(`[auditService] Audit log hash mismatch (tampering detected) for ID: ${row.id}`);
+        }
+      }
+
+      const hasSecret = !!process.env.AUDIT_LOG_SIGNING_SECRET;
+      if (row.signature && hasSecret) {
+        signature_verified = verifyAuditSignature(payload, row.signature);
+        if (!signature_verified) {
+          console.error(`[auditService] Audit log signature verification failed (tampering detected) for ID: ${row.id}`);
+        }
+      } else if (row.signature && !hasSecret) {
+        signature_verified = null;
+      } else if (!row.signature) {
+        signature_verified = null;
+      }
+
+      return {
+        ...row,
+        hash_verified,
+        signature_verified,
+      };
+    });
 
     return {
       logs,
