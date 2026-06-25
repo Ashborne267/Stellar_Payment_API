@@ -454,6 +454,64 @@ describe("MultisigApprovalModal Component", () => {
         expect(decorativeElement).toBeInTheDocument();
       });
     });
+
+    it("sets aria-busy on dialog during loading", async () => {
+      renderWithProvider();
+
+      const modal = screen.getByRole("dialog");
+      expect(modal).toHaveAttribute("aria-busy", "false");
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      expect(modal).toHaveAttribute("aria-busy", "true");
+
+      await waitFor(() => {
+        expect(modal).toHaveAttribute("aria-busy", "false");
+      }, { timeout: 2000 });
+    });
+
+    it("has screen reader announcement region for step transitions", () => {
+      renderWithProvider();
+
+      const announcementRegion = document.querySelector('[aria-live="assertive"][aria-atomic="true"]');
+      expect(announcementRegion).toBeInTheDocument();
+      expect(announcementRegion).toHaveClass("sr-only");
+    });
+
+    it("traps focus within the modal", async () => {
+      renderWithProvider();
+
+      const modal = screen.getByRole("dialog");
+      const closeButton = screen.getByLabelText("Close modal");
+      const signButtons = screen.getAllByText("Sign");
+      const firstSignButton = signButtons[0];
+
+      closeButton.focus();
+
+      // Tab forward from close button should move to first sign button
+      fireEvent.keyDown(document, { key: "Tab" });
+      // Wait for React to process
+      await waitFor(() => {
+        expect(document.activeElement).toBe(firstSignButton);
+      });
+    });
+
+    it("traps focus in reverse direction with Shift+Tab", () => {
+      renderWithProvider();
+
+      const modal = screen.getByRole("dialog");
+      const closeButton = screen.getByLabelText("Close modal");
+      const signButtons = screen.getAllByText("Sign");
+      const firstSignButton = signButtons[0];
+
+      firstSignButton.focus();
+
+      // Shift+Tab from first sign button should wrap to close button
+      fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+
+      expect(document.activeElement).toBe(closeButton);
+    });
   });
 
   describe("Transaction Expiry", () => {
