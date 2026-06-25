@@ -51,6 +51,9 @@ vi.mock("../lib/stellar.js", () => ({
   findStrictReceivePaths: vi.fn(),
   isValidStellarPublicKey: mockIsValidStellarPublicKey,
   verifyTransactionSignature: mockVerifyTransactionSignature,
+  withHorizonRetry: vi.fn().mockResolvedValue(undefined),
+  isValidAssetCode: vi.fn().mockReturnValue(true),
+  isValidStellarAccountId: vi.fn().mockReturnValue(true),
 }));
 
 vi.mock("../lib/branding.js", () => ({
