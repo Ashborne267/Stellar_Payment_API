@@ -45,6 +45,7 @@ export interface MultisigContextType {
   transaction: MultisigTransaction | null;
   currentStep: MultisigStep;
   isLoading: boolean;
+  isPendingConfirmation: boolean;
   error: string | null;
   isMounted: boolean;
   isVisible: boolean;
@@ -173,19 +174,26 @@ interface MultisigProviderProps {
   readonly networkPassphrase: string;
 }
 
-export function MultisigProvider({ children, networkPassphrase: _networkPassphrase }: MultisigProviderProps) {
-  const [state, dispatch] = useReducer(multisigReducer, INITIAL_STATE);
-
-  // Always-current snapshot for use inside async callbacks without stale-closure issues.
-  const stateRef = useRef(state);
-  stateRef.current = state;
+export function MultisigProvider({ children, networkPassphrase }: MultisigProviderProps) {
+  const [transaction, setTransaction] = useState<MultisigTransaction | null>(null);
+  const [currentStep, setCurrentStep] = useState<MultisigStep>("review");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isPendingConfirmation, setIsPendingConfirmation] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isMounted, setIsMounted] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
 
   const clearError = useCallback(() => {
     dispatch({ type: "CLEAR_ERROR" });
   }, []);
 
   const resetModal = useCallback(() => {
-    dispatch({ type: "RESET" });
+    setTransaction(null);
+    setCurrentStep("review");
+    setIsLoading(false);
+    setIsPendingConfirmation(false);
+    setError(null);
+    setIsVisible(false);
   }, []);
 
   const setTransactionSafe = useCallback((newTransaction: MultisigTransaction | null) => {
@@ -256,27 +264,54 @@ export function MultisigProvider({ children, networkPassphrase: _networkPassphra
       return;
     }
 
-    const signedWeight = transaction.signers
-      .filter((s) => s.hasSigned)
-      .reduce((sum, s) => sum + s.weight, 0);
-    if (signedWeight < transaction.minSignatures) {
-      dispatch({ type: "SET_ERROR", payload: "Not enough signatures to submit transaction" });
-      return;
-    }
+    const previousTransaction = { ...transaction, signers: [...transaction.signers] };
 
-    dispatch({ type: "SET_LOADING", payload: true });
-    dispatch({ type: "CLEAR_ERROR" });
-    dispatch({ type: "SET_STEP", payload: "processing" });
+    try {
+      clearError();
+
+      // Verify enough signatures
+      const signedWeight = transaction.signers.filter(s => s.hasSigned)
+        .reduce((sum, s) => sum + s.weight, 0);
+      
+      if (signedWeight < transaction.minSignatures) {
+        throw new Error("Not enough signatures to submit transaction");
+      }
+
+      // Optimistic update: immediately show confirm step with a pending tx hash
+      const pendingTxHash = `tx_pending_${Date.now()}`;
+      setIsPendingConfirmation(true);
+      setCurrentStep("confirm");
+      setTransactionSafe({
+        ...transaction,
+        status: 'approved' as MultisigApprovalStatus,
+        submittedTxHash: pendingTxHash,
+      });
+
+      // Simulate submission process
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      // Finalize with real transaction hash
+      const realTxHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      setTransactionSafe({
+        ...transaction,
+        status: 'approved' as MultisigApprovalStatus,
+        submittedTxHash: realTxHash,
+      });
 
     try {
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const txHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       dispatch({ type: "SUBMIT_SUCCESS", txHash });
     } catch (err) {
+      // Revert optimistic update
+      setTransactionSafe(previousTransaction);
       const errorMessage = err instanceof Error ? err.message : "Failed to submit transaction";
       dispatch({ type: "SET_ERROR", payload: errorMessage });
       dispatch({ type: "SET_STEP", payload: "error" });
       console.error("Submission error:", err);
+    } finally {
+      setIsLoading(false);
+      setIsPendingConfirmation(false);
     }
   }, []);
 
@@ -332,38 +367,44 @@ export function MultisigProvider({ children, networkPassphrase: _networkPassphra
     };
   }, [transaction, currentStep]);
 
-  const value: MultisigContextType = useMemo(
-    () => ({
-      transaction,
-      currentStep,
-      isLoading,
-      error,
-      isMounted,
-      isVisible,
-      setTransaction: setTransactionSafe,
-      setCurrentStep: (step: MultisigStep) => dispatch({ type: "SET_STEP", payload: step }),
-      signTransaction,
-      submitTransaction,
-      resetModal,
-      clearError,
-      retryAction,
-      ...computedValues,
-    }),
-    [
-      transaction,
-      currentStep,
-      isLoading,
-      error,
-      isMounted,
-      isVisible,
-      setTransactionSafe,
-      signTransaction,
-      submitTransaction,
-      resetModal,
-      clearError,
-      retryAction,
-      computedValues,
-    ],
+  const value: MultisigContextType = useMemo(() => ({
+    transaction,
+    currentStep,
+    isLoading,
+    isPendingConfirmation,
+    error,
+    isMounted,
+    isVisible,
+    setTransaction: setTransactionSafe,
+    setCurrentStep,
+    signTransaction,
+    submitTransaction,
+    resetModal,
+    clearError,
+    retryAction,
+    ...computedValues
+  }), [
+    transaction,
+    currentStep,
+    isLoading,
+    isPendingConfirmation,
+    error,
+    isMounted,
+    isVisible,
+    setTransactionSafe,
+    setCurrentStep,
+    signTransaction,
+    submitTransaction,
+    resetModal,
+    clearError,
+    retryAction,
+    computedValues
+  ]);
+
+  return (
+    <MultisigContext.Provider value={value}>
+      {children}
+    </MultisigContext.Provider>
   );
 
   return <MultisigContext.Provider value={value}>{children}</MultisigContext.Provider>;
@@ -380,12 +421,13 @@ export function useMultisig() {
 }
 
 export function useMultisigState() {
-  const {
-    transaction,
-    currentStep,
-    isLoading,
-    error,
-    isMounted,
+  const { 
+    transaction, 
+    currentStep, 
+    isLoading, 
+    isPendingConfirmation,
+    error, 
+    isMounted, 
     isVisible,
     canSign,
     canSubmit,
@@ -400,6 +442,7 @@ export function useMultisigState() {
     transaction,
     currentStep,
     isLoading,
+    isPendingConfirmation,
     error,
     isMounted,
     isVisible,

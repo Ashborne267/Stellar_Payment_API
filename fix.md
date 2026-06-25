@@ -1,9 +1,9 @@
-[Frontend] Improve screen reader support for Multi-sig Approval Modal
+ [Frontend] Enable optimistic updates in Multi-sig Approval Modal
 Repo Avatar
 emdevelopa/Stellar_Payment_API
 Description
 This task involves UX enhancement for the Multi-sig Approval Modal module.
-The goal is to improve screen reader support for Multi-sig Approval Modal to improve the platform's styling, user interactions, and overall accessibility.
+The goal is to enable optimistic updates in Multi-sig Approval Modal to improve the platform's styling, user interactions, and overall accessibility.
 
 Requirements and context
 
@@ -14,11 +14,11 @@ Specifically focused on frontend UX enhancement and responsiveness
 Suggested execution
 
 Fork the repo and create a branch
-git checkout -b feature/fe-improve-screen-reader-support-for-multi-sig-approval-modal
+git checkout -b feature/fe-enable-optimistic-updates-in-multi-sig-approval-modal
 Implement changes
 
 Review existing component in Multi-sig Approval Modal
-Apply changes: Improve screen reader support for Multi-sig Approval Modal
+Apply changes: Enable optimistic updates in Multi-sig Approval Modal
 Use clean CSS or tailwind variables for styling
 Maintain state transitions and visual feedback
 Test and commit
