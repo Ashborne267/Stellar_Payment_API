@@ -16,6 +16,25 @@ const STELLAR_ADDRESS_REGEX = /^G[A-Z2-7]{55}$/;
 const STELLAR_TX_HASH_REGEX = /^[a-f0-9]{64}$/i;
 const ASSET_CODE_REGEX = /^[A-Z0-9]{1,12}$/;
 
+/**
+ * Asset codes that represent the Stellar native asset (lumens). The rest of the
+ * codebase stores the native asset as "XLM" with a null issuer (see
+ * `resolveAsset` in stellar.js), so both spellings must be treated as native —
+ * otherwise legitimate native payments are rejected for "missing" an issuer.
+ */
+const NATIVE_ASSET_CODES = new Set(["native", "xlm"]);
+
+/**
+ * @param {unknown} asset
+ * @returns {boolean} true when `asset` denotes the native asset (XLM / native).
+ */
+export function isNativeAsset(asset) {
+  return (
+    typeof asset === "string" &&
+    NATIVE_ASSET_CODES.has(asset.trim().toLowerCase())
+  );
+}
+
 /** Maximum byte length for a Stellar text memo. */
 const MAX_MEMO_TEXT_BYTES = 28;
 
@@ -79,10 +98,10 @@ export function validatePaymentRecord(payment) {
     };
   }
 
-  // asset — must be a valid asset code or "native"
+  // asset — must be the native asset (XLM / "native") or a valid asset code
   if (
     typeof payment.asset !== "string" ||
-    (payment.asset !== "native" && !ASSET_CODE_REGEX.test(payment.asset))
+    (!isNativeAsset(payment.asset) && !ASSET_CODE_REGEX.test(payment.asset))
   ) {
     return {
       valid: false,
@@ -90,8 +109,9 @@ export function validatePaymentRecord(payment) {
     };
   }
 
-  // asset_issuer — required for non-native assets, must be a Stellar address
-  if (payment.asset !== "native") {
+  // asset_issuer — required for non-native assets, must be a Stellar address.
+  // The native asset (XLM / "native") never has an issuer.
+  if (!isNativeAsset(payment.asset)) {
     if (
       typeof payment.asset_issuer !== "string" ||
       !STELLAR_ADDRESS_REGEX.test(payment.asset_issuer)
