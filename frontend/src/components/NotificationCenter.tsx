@@ -1,92 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { useMerchantApiKey } from "@/lib/merchant-store";
 import { BellIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { motion, AnimatePresence } from "framer-motion";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-
-interface Notification {
-  id: string;
-  message: string;
-  read?: boolean;
-  timestamp?: string;
-}
+import { useNotificationCenter } from "@/hooks/useNotificationCenter";
 
 export default function NotificationCenter() {
-  const apiKey = useMerchantApiKey();
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [isOpen, setIsOpen] = useState(false);
-  const [optimisticNotifications, setOptimisticNotifications] = useState<Set<string>>(new Set());
-
-  const fetchNotifications = useCallback(async () => {
-    if (!apiKey) return;
-    try {
-      const res = await fetch(`${API_URL}/api/notifications`, {
-        headers: { "x-api-key": apiKey }
-      });
-      if (!res.ok) return;
-      const data = await res.json();
-      setUnreadCount(data.unreadCount || 0);
-      setNotifications(data.notifications || []);
-    } catch {
-      // silently fail
-    }
-  }, [apiKey]);
-
-  useEffect(() => {
-    fetchNotifications();
-    // Poll every 30s
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
-  }, [fetchNotifications]);
-
-  const handleDismiss = useCallback((notificationId: string) => {
-    // Optimistic update
-    setOptimisticNotifications(prev => new Set(prev).add(notificationId));
-    setNotifications(prev => prev.filter(n => n.id !== notificationId));
-    setUnreadCount(prev => Math.max(0, prev - 1));
-
-    // Actual API call (fire and forget)
-    fetch(`${API_URL}/api/notifications/${notificationId}/dismiss`, {
-      method: "POST",
-      headers: { "x-api-key": apiKey }
-    }).catch(() => {
-      // Revert on error
-      setOptimisticNotifications(prev => {
-        const next = new Set(prev);
-        next.delete(notificationId);
-        return next;
-      });
-      fetchNotifications();
-    });
-  }, [apiKey, fetchNotifications]);
-
-  const handleMarkAsRead = useCallback(() => {
-    if (unreadCount === 0) return;
-    
-    // Optimistic update
-    setUnreadCount(0);
-    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-
-    // Actual API call
-    fetch(`${API_URL}/api/notifications/mark-read`, {
-      method: "POST",
-      headers: { "x-api-key": apiKey }
-    }).catch(() => {
-      // Revert on error
-      fetchNotifications();
-    });
-  }, [unreadCount, apiKey, fetchNotifications]);
-
-  const toggleOpen = useCallback(() => {
-    setIsOpen(prev => !prev);
-    if (!isOpen && unreadCount > 0) {
-      handleMarkAsRead();
-    }
-  }, [isOpen, unreadCount, handleMarkAsRead]);
+  const { notifications, unreadCount, isOpen, toggleOpen, handleDismiss } =
+    useNotificationCenter();
 
   return (
     <div className="relative">
@@ -95,7 +15,7 @@ export default function NotificationCenter() {
         className="relative flex items-center justify-center p-2.5 rounded-lg border border-[#E8E8E8] bg-white text-[#6B6B6B] hover:text-[#0A0A0A] hover:bg-[#F5F5F5] transition-all min-h-[44px] min-w-[44px]"
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
-        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
+        aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ""}`}
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
@@ -109,8 +29,8 @@ export default function NotificationCenter() {
               className="absolute top-2 right-2 flex h-2 w-2"
               aria-hidden="true"
             >
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00F5D4] opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00F5D4] border border-black shadow-[0_0_8px_#00F5D4]"></span>
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00F5D4] opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00F5D4] border border-black shadow-[0_0_8px_#00F5D4]" />
             </motion.span>
           )}
         </AnimatePresence>
@@ -129,8 +49,10 @@ export default function NotificationCenter() {
             aria-label="Notification Center"
           >
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-[10px] font-bold text-[#0A0A0A] uppercase tracking-widest">Notifications</h3>
-              <span 
+              <h3 className="text-[10px] font-bold text-[#0A0A0A] uppercase tracking-widest">
+                Notifications
+              </h3>
+              <span
                 className="text-[10px] font-medium text-[#6B6B6B] bg-[#F5F5F5] px-2 py-1 rounded"
                 aria-live="polite"
                 aria-atomic="true"
@@ -138,8 +60,8 @@ export default function NotificationCenter() {
                 {unreadCount} unread
               </span>
             </div>
-            
-            <div 
+
+            <div
               className="flex flex-col gap-3"
               role="list"
               aria-label="Notification list"
@@ -174,10 +96,17 @@ export default function NotificationCenter() {
                       >
                         <XMarkIcon className="h-4 w-4 text-[#6B6B6B]" aria-hidden="true" />
                       </button>
-                      <p className="text-[10px] font-bold text-[#0A0A0A] uppercase tracking-widest mb-1">Alert</p>
-                      <p className="text-xs font-medium text-[#6B6B6B] leading-relaxed pr-6">{notif.message}</p>
+                      <p className="text-[10px] font-bold text-[#0A0A0A] uppercase tracking-widest mb-1">
+                        Alert
+                      </p>
+                      <p className="text-xs font-medium text-[#6B6B6B] leading-relaxed pr-6">
+                        {notif.message}
+                      </p>
                       {notif.timestamp && (
-                        <p className="text-[10px] text-[#A0A0A0] mt-2" aria-label={`Timestamp: ${notif.timestamp}`}>
+                        <p
+                          className="text-[10px] text-[#A0A0A0] mt-2"
+                          aria-label={`Timestamp: ${notif.timestamp}`}
+                        >
                           {new Date(notif.timestamp).toLocaleString()}
                         </p>
                       )}

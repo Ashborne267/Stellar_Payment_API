@@ -8,6 +8,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useOptimisticUpdate } from "@/hooks/useOptimisticUpdate";
 import { useDropzone } from "react-dropzone";
 import Link from "next/link";
 import Image from "next/image";
@@ -266,18 +267,26 @@ export default function SettingsPage() {
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SettingsTab>("api");
   const { hideCents, setHideCents } = useDisplayPreferences();
-  const [branding, setBranding] = useState(DEFAULT_BRANDING);
+  const {
+    state: branding,
+    setState: setBranding,
+    isPending: savingBranding,
+    executeUpdate: executeBrandingUpdate,
+  } = useOptimisticUpdate(DEFAULT_BRANDING);
   const [brandingError, setBrandingError] = useState<string | null>(null);
   const [loadingBranding, setLoadingBranding] = useState(false);
-  const [savingBranding, setSavingBranding] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
-  const [webhookUrl, setWebhookUrl] = useState("");
+  const {
+    state: webhookUrl,
+    setState: setWebhookUrl,
+    isPending: savingWebhook,
+    executeUpdate: executeWebhookUpdate,
+  } = useOptimisticUpdate("");
   const [webhookSecretMasked, setWebhookSecretMasked] = useState("");
   const [webhookNewSecret, setWebhookNewSecret] = useState<string | null>(null);
   const [webhookUrlError, setWebhookUrlError] = useState<string | null>(null);
   const [webhookSaveError, setWebhookSaveError] = useState<string | null>(null);
   const [loadingWebhook, setLoadingWebhook] = useState(false);
-  const [savingWebhook, setSavingWebhook] = useState(false);
   const [regeneratingSecret, setRegeneratingSecret] = useState(false);
   const [confirmRegenSecret, setConfirmRegenSecret] = useState(false);
   const [webhookRevealedSecret, setWebhookRevealedSecret] = useState(false);
@@ -413,26 +422,21 @@ export default function SettingsPage() {
         return;
       }
     }
-    setSavingBranding(true);
-    try {
-      const res = await fetch(`${API_URL}/api/merchant-branding`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-        body: JSON.stringify(branding),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to save branding");
-      setBranding(data.branding_config ?? branding);
-      toast.success("Branding saved");
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Failed to save branding";
-      setBrandingError(msg);
-      toast.error(msg);
-    } finally {
-      setSavingBranding(false);
-    }
-  }, [apiKey, branding]);
+    await executeBrandingUpdate(
+      (current) => current, // optimistically keep current branding
+      async () => {
+        const res = await fetch(`${API_URL}/api/merchant-branding`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+          body: JSON.stringify(branding),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Failed to save branding");
+        setBranding(data.branding_config ?? branding);
+        toast.success("Branding saved");
+      }
+    );
+  }, [apiKey, branding, executeBrandingUpdate, setBranding]);
 
   const validateWebhookUrl = useCallback((url: string) => {
     if (!url.trim()) return null;
@@ -447,10 +451,10 @@ export default function SettingsPage() {
 
   const handleWebhookUrlChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      setWebhookUrl(e.target.value);
+      setWebhookUrl(() => e.target.value);
       setWebhookUrlError(validateWebhookUrl(e.target.value));
     },
-    [validateWebhookUrl],
+    [validateWebhookUrl, setWebhookUrl],
   );
 
   const saveWebhookUrl = useCallback(async () => {
@@ -460,30 +464,26 @@ export default function SettingsPage() {
       setWebhookUrlError(err);
       return;
     }
-    setSavingWebhook(true);
     setWebhookSaveError(null);
-    try {
-      const res = await fetch(`${API_URL}/api/webhook-settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "x-api-key": apiKey },
-        body: JSON.stringify({ webhook_url: webhookUrl.trim() || undefined }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to save webhook URL");
-      setWebhookUrl(data.webhook_url ?? "");
-      setWebhookVerification(data.webhook_domain_verification ?? null);
-      toast.success(
-        data.webhook_url ? "Webhook URL saved" : "Webhook URL cleared",
-      );
-    } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : "Failed to save webhook URL";
-      setWebhookSaveError(msg);
-      toast.error(msg);
-    } finally {
-      setSavingWebhook(false);
-    }
-  }, [apiKey, webhookUrl, validateWebhookUrl]);
+    const optimisticUrl = webhookUrl.trim();
+    await executeWebhookUpdate(
+      () => optimisticUrl, // optimistically show the trimmed URL immediately
+      async () => {
+        const res = await fetch(`${API_URL}/api/webhook-settings`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "x-api-key": apiKey },
+          body: JSON.stringify({ webhook_url: optimisticUrl || undefined }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Failed to save webhook URL");
+        setWebhookUrl(data.webhook_url ?? "");
+        setWebhookVerification(data.webhook_domain_verification ?? null);
+        toast.success(
+          data.webhook_url ? "Webhook URL saved" : "Webhook URL cleared",
+        );
+      }
+    );
+  }, [apiKey, webhookUrl, validateWebhookUrl, executeWebhookUpdate, setWebhookUrl]);
 
   const verifyWebhookDomain = useCallback(async () => {
     if (!apiKey) return;

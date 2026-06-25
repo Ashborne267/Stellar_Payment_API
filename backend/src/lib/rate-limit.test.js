@@ -9,11 +9,15 @@ vi.mock("redis", () => ({
 }));
 
 import {
+  createDashboardMetricsRateLimit,
   createMerchantSecurityActionRateLimit,
   createRedisRateLimitStore,
   createSep10ChallengeRateLimit,
   createSep10VerifyRateLimit,
   createVerifyPaymentRateLimit,
+  DASHBOARD_METRICS_RATE_LIMIT_MAX,
+  DASHBOARD_METRICS_RATE_LIMIT_WINDOW_MS,
+  getDashboardMetricsRateLimitKey,
   getMerchantSecurityActionRateLimitKey,
   getSep10ChallengeRateLimitKey,
   getSep10VerifyRateLimitKey,
@@ -153,6 +157,63 @@ describe("getMerchantSecurityActionRateLimitKey", () => {
         ip: "203.0.113.10",
       }),
     ).toMatch(/^api:[a-f0-9]{64}$/);
+  });
+});
+
+describe("createDashboardMetricsRateLimit", () => {
+  it("passes the dashboard metrics config into express-rate-limit", () => {
+    const store = { kind: "redis-store" };
+    const middleware = vi.fn();
+    const rateLimitFactory = vi.fn(() => middleware);
+
+    const result = createDashboardMetricsRateLimit({ store, rateLimitFactory });
+
+    expect(result).toBe(middleware);
+    expect(rateLimitFactory).toHaveBeenCalledWith({
+      windowMs: DASHBOARD_METRICS_RATE_LIMIT_WINDOW_MS,
+      max: DASHBOARD_METRICS_RATE_LIMIT_MAX,
+      message: {
+        error: "Too many dashboard requests, please try again later.",
+        code: "DASHBOARD_METRICS_RATE_LIMITED",
+      },
+      standardHeaders: true,
+      legacyHeaders: false,
+      validate: { ip: false },
+      keyGenerator: expect.any(Function),
+      handler: expect.any(Function),
+      store,
+      passOnStoreError: true,
+    });
+  });
+});
+
+describe("getDashboardMetricsRateLimitKey", () => {
+  it("uses merchant ids when available", () => {
+    expect(
+      getDashboardMetricsRateLimitKey({
+        merchant: { id: "merchant-789" },
+        headers: {},
+        ip: "203.0.113.10",
+      }),
+    ).toBe("merchant:merchant-789");
+  });
+
+  it("hashes api keys when merchant context is unavailable", () => {
+    expect(
+      getDashboardMetricsRateLimitKey({
+        headers: { "x-api-key": "dashboard-secret-key" },
+        ip: "203.0.113.10",
+      }),
+    ).toMatch(/^api:[a-f0-9]{64}$/);
+  });
+
+  it("falls back to ip-based keys when no merchant or api key is available", () => {
+    expect(
+      getDashboardMetricsRateLimitKey({
+        headers: {},
+        ip: "203.0.113.10",
+      }),
+    ).toBe("ip:203.0.113.10");
   });
 });
 

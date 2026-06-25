@@ -11,7 +11,7 @@ import { createSwaggerSpec } from "./swagger.js";
 
 import createPaymentsRouter from "./routes/payments.js";
 import createMerchantsRouter from "./routes/merchants.js";
-import metricsRouter from "./routes/metrics.js";
+import createMetricsRouter from "./routes/metrics.js";
 import webhooksRouter from "./routes/webhooks.js";
 import prometheusRouter from "./routes/prometheus.js";
 import sep0001Router from "./routes/sep0001.js";
@@ -35,7 +35,12 @@ import {
   createMerchantRegistrationRateLimit,
   createSep10ChallengeRateLimit,
   createSep10VerifyRateLimit,
+  createDashboardMetricsRateLimit,
 } from "./lib/rate-limit.js";
+import {
+  createTransactionSignerMiddlewares,
+  handleVerifySignature,
+} from "./lib/transaction-signer.js";
 import { versionDeprecationMiddleware } from "./lib/version-deprecation.js";
 
 export async function createApp({ redisClient }) {
@@ -263,6 +268,14 @@ export async function createApp({ redisClient }) {
     sep10VerifyRateLimit: createSep10VerifyRateLimit({ store: sep10RateLimitStore }),
   });
 
+  const dashboardMetricsRateLimit = createDashboardMetricsRateLimit({
+    store: redisAvailable
+      ? createRedisRateLimitStore({ client: redisClient, prefix: "rl:dashboard:" })
+      : undefined,
+  });
+
+  const metricsRouter = createMetricsRouter({ dashboardMetricsRateLimit });
+
   // x402 pay-per-request on payment creation endpoints (custom middleware flow)
   const x402Provider = process.env.X402_PROVIDER_PUBLIC_KEY;
   const x402Enabled = Boolean(x402Provider && process.env.X402_JWT_SECRET);
@@ -302,6 +315,12 @@ export async function createApp({ redisClient }) {
   app.use("/api", metricsRouter);
   app.use("/api", webhooksRouter);
   app.use("/api/payments", paymentDetailsRouter); // NEW — GET /api/payments/:id
+
+  // Transaction Signer — rate-limited signature verification endpoint (#912)
+  const transactionSignerMiddlewares = createTransactionSignerMiddlewares({
+    redisClient: redisAvailable ? redisClient : undefined,
+  });
+  app.post("/api/verify-signature", ...transactionSignerMiddlewares, handleVerifySignature);
 
   // SEP-0001 stellar.toml endpoint (public, no auth required)
   app.use("/", sep0001Router);

@@ -18,7 +18,6 @@ export interface BalanceSyncState {
   isLoading: boolean;
   lastUpdated: Date | null;
   error: string | null;
-  /** Balance values that were set optimistically before the next poll confirms them. */
   optimisticBalances: Record<string, string>;
 }
 
@@ -26,7 +25,8 @@ export type BalanceSyncAction =
   | { type: "FETCH_START" }
   | { type: "FETCH_SUCCESS"; balances: Balance[]; at: Date }
   | { type: "FETCH_ERROR"; error: string }
-  | { type: "OPTIMISTIC_UPDATE"; code: string; balance: string };
+  | { type: "OPTIMISTIC_UPDATE"; code: string; balance: string }
+  | { type: "RESET" };
 
 export const initialBalanceSyncState: BalanceSyncState = {
   balances: [],
@@ -36,10 +36,7 @@ export const initialBalanceSyncState: BalanceSyncState = {
   optimisticBalances: {},
 };
 
-// Consolidating the related pieces of state into a reducer keeps the
-// fetch lifecycle (start → success → error) explicit and prevents the
-// inconsistent intermediate renders that separate setState calls can cause.
-export function balanceSyncReducer(
+function balanceSyncReducer(
   state: BalanceSyncState,
   action: BalanceSyncAction,
 ): BalanceSyncState {
@@ -53,7 +50,6 @@ export function balanceSyncReducer(
         isLoading: false,
         lastUpdated: action.at,
         error: null,
-        // Clear optimistic overrides once the server value arrives
         optimisticBalances: {},
       };
     case "FETCH_ERROR":
@@ -66,15 +62,13 @@ export function balanceSyncReducer(
           [action.code]: action.balance,
         },
       };
+    case "RESET":
+      return { ...initialBalanceSyncState };
     default:
       return state;
   }
 }
 
-/**
- * Merge confirmed balances with any pending optimistic overrides so callers
- * always see a consistent view without waiting for the next poll.
- */
 function applyOptimisticOverrides(
   balances: Balance[],
   optimistic: Record<string, string>,
@@ -91,13 +85,6 @@ function applyOptimisticOverrides(
   return merged;
 }
 
-/**
- * Hook for real-time balance synchronization with polling, race condition
- * prevention, and optimistic updates (issue #956).
- *
- * Screen-reader-ready: returns `ariaLabel` and `liveRegionText` for callers
- * to wire up accessible live regions (issue #955).
- */
 export function useBalanceSync(
   merchantId: string | null | undefined,
   apiKey: string | null | undefined,
@@ -113,6 +100,8 @@ export function useBalanceSync(
 
   const [state, dispatch] = useReducer(balanceSyncReducer, initialBalanceSyncState);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const onUpdateRef = useRef(onUpdate);
+  onUpdateRef.current = onUpdate;
 
   const fetchBalances = useCallback(async () => {
     if (!enabled) return;
@@ -152,22 +141,21 @@ export function useBalanceSync(
       }
 
       dispatch({ type: "FETCH_SUCCESS", balances: newBalances, at: new Date() });
-      onUpdate?.(newBalances);
+      onUpdateRef.current?.(newBalances);
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") return;
       const message = error instanceof Error ? error.message : "Balance sync failed";
       console.error("Balance sync error:", error);
       dispatch({ type: "FETCH_ERROR", error: message });
     }
-  }, [merchantId, apiKey, enabled, onUpdate, address, horizonUrl]);
+  }, [merchantId, apiKey, enabled, address, horizonUrl]);
 
-  /**
-   * Optimistically update a single balance (issue #956).
-   * The value is shown immediately; the next poll from the server clears the
-   * override and replaces it with the authoritative value.
-   */
   const applyOptimistic = useCallback((code: string, balance: string) => {
     dispatch({ type: "OPTIMISTIC_UPDATE", code, balance });
+  }, []);
+
+  const reset = useCallback(() => {
+    dispatch({ type: "RESET" });
   }, []);
 
   useEffect(() => {
@@ -187,9 +175,8 @@ export function useBalanceSync(
     state.optimisticBalances,
   );
 
-  // Derive an accessible description for live regions (issue #955)
   const liveRegionText = state.isLoading
-    ? "Syncing balances…"
+    ? "Syncing balances\u2026"
     : state.error
       ? `Balance sync error: ${state.error}`
       : state.lastUpdated
@@ -203,12 +190,11 @@ export function useBalanceSync(
     error: state.error,
     refresh: fetchBalances,
     applyOptimistic,
+    reset,
     isStale: state.lastUpdated
       ? Date.now() - state.lastUpdated.getTime() > pollingInterval * 2
       : true,
-    /** Aria-label for the balance region — pass to aria-label on the wrapper. */
     ariaLabel: "Real-time balance information",
-    /** Text to place in an aria-live region so screen readers announce updates. */
     liveRegionText,
   };
 }

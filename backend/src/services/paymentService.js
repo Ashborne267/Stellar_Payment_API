@@ -26,6 +26,8 @@ import {
   paymentConfirmationLatency,
   paymentFailedCounter,
 } from "../lib/metrics.js";
+import { paymentSignatureVerifier } from "../lib/payment-signature-verification.js";
+import { logger } from "../lib/logger.js";
 
 const SAFE_METADATA_KEY_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 let supabaseClientPromise;
@@ -89,14 +91,6 @@ function applyPaymentFilters(query, filters) {
   return query;
 }
 
-function isSignatureVerificationAccepted(result) {
-  if (result === true) {
-    return true;
-  }
-
-  return Boolean(result && typeof result === "object" && result.valid === true);
-}
-
 async function getSupabaseClient() {
   if (!supabaseClientPromise) {
     supabaseClientPromise = import("../lib/supabase.js").then((module) => module.supabase);
@@ -105,12 +99,8 @@ async function getSupabaseClient() {
   return supabaseClientPromise;
 }
 
-async function verifyTransactionSignatureIfAvailable(txHash) {
-  if (typeof verifyTransactionSignature !== "function") {
-    return { valid: true, skipped: true };
-  }
-
-  return verifyTransactionSignature(txHash);
+async function verifyTransactionSignatureIfAvailable(txHash, merchantId = null) {
+  return paymentSignatureVerifier.verifyTransaction(txHash, { merchantId });
 }
 
 function escapeLikePattern(value) {
@@ -543,6 +533,18 @@ export const paymentService = {
     const paymentLinkBase = process.env.PAYMENT_LINK_BASE || "http://localhost:3000";
     const paymentLink = `${paymentLinkBase}/pay/${paymentId}`;
 
+    logger.info(
+      {
+        paymentId,
+        merchantId: merchant.id,
+        asset,
+        amount: body.amount,
+        recipient: body.recipient,
+        hasAssetIssuer: !!resolvedAssetIssuer,
+      },
+      "Payment session created",
+    );
+
     const resolvedBranding = resolveBrandingConfig({
       merchantBranding: merchant.branding_config,
       brandingOverrides: body.branding_overrides,
@@ -688,8 +690,20 @@ export const paymentService = {
     if (match) {
       const signatureResult = await verifyTransactionSignatureIfAvailable(
         match.transaction_hash,
+        data.merchant_id,
       );
-      if (!isSignatureVerificationAccepted(signatureResult)) {
+      if (!signatureResult.valid) {
+        logger.warn(
+          {
+            paymentId,
+            txHash: match.transaction_hash,
+            merchantId: data.merchant_id,
+            reason: signatureResult.reason,
+            isMultiSig: signatureResult.isMultiSig,
+            signatureCount: signatureResult.signatureCount,
+          },
+          "Payment verification: transaction signature verification failed",
+        );
         return { status: "pending" };
       }
     }

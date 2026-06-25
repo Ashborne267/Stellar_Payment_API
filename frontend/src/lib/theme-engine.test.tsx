@@ -135,4 +135,40 @@ describe("Dark Mode Theme Engine (#800)", () => {
     fireEvent.click(screen.getByText("toggle"));
     await waitFor(() => expect(screen.getByTestId("theme")).toHaveTextContent("system"));
   });
+
+  describe("Optimistic updates", () => {
+    it("applies optimistic UI update before persistence completes", () => {
+      renderEngine();
+      fireEvent.click(screen.getByText("set-dark"));
+      expect(screen.getByTestId("theme")).toHaveTextContent("dark");
+      expect(screen.getByTestId("resolved")).toHaveTextContent("dark");
+    });
+
+    it("rolls back to previous theme when storage fails", async () => {
+      const orig = Storage.prototype.setItem;
+      Storage.prototype.setItem = vi.fn(() => { throw new Error("Storage error"); });
+
+      renderEngine();
+      await waitFor(() => expect(screen.getByTestId("mounted")).toHaveTextContent("true"));
+
+      fireEvent.click(screen.getByText("set-dark"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("theme")).toHaveTextContent("system");
+      });
+
+      Storage.prototype.setItem = orig;
+    });
+
+    it("persists theme on successful storage", async () => {
+      renderEngine();
+      await waitFor(() => expect(screen.getByTestId("mounted")).toHaveTextContent("true"));
+
+      fireEvent.click(screen.getByText("set-dark"));
+
+      await waitFor(() => {
+        expect(localStorage.getItem("merchant-theme-preference")).toBe("dark");
+      });
+    });
+  });
 });

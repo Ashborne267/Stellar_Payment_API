@@ -19,6 +19,12 @@ export const SEP10_VERIFY_RATE_LIMIT_WINDOW_MS = Number(
 export const SEP10_VERIFY_RATE_LIMIT_MAX = Number(
   process.env.SEP10_VERIFY_RATE_LIMIT_MAX || 10,
 );
+export const DASHBOARD_METRICS_RATE_LIMIT_WINDOW_MS = Number(
+  process.env.DASHBOARD_METRICS_RATE_LIMIT_WINDOW_MS || 60 * 1000,
+);
+export const DASHBOARD_METRICS_RATE_LIMIT_MAX = Number(
+  process.env.DASHBOARD_METRICS_RATE_LIMIT_MAX || 30,
+);
 
 function setStandardRateLimitHeaders(res, rateLimitState) {
   if (!res || !rateLimitState) {
@@ -189,6 +195,52 @@ export function createSep10VerifyRateLimit({
     legacyHeaders: false,
     validate: { ip: false },
     keyGenerator: getSep10VerifyRateLimitKey,
+    handler: (req, res, _next, options) => {
+      setStandardRateLimitHeaders(res, req.rateLimit);
+      res.status(options.statusCode).json(options.message);
+    },
+    store,
+    passOnStoreError: true,
+  });
+}
+
+export function getDashboardMetricsRateLimitKey(req) {
+  const merchantId =
+    typeof req?.merchant?.id === "string" && req.merchant.id.length > 0
+      ? `merchant:${req.merchant.id}`
+      : null;
+  const apiKey =
+    typeof req?.headers?.["x-api-key"] === "string" &&
+    req.headers["x-api-key"].length > 0
+      ? `api:${createHash("sha256").update(req.headers["x-api-key"]).digest("hex")}`
+      : null;
+  const ipKey = ipKeyGenerator(req?.ip ?? req?.socket?.remoteAddress ?? "unknown-ip");
+
+  return merchantId ?? apiKey ?? `ip:${ipKey}`;
+}
+
+/**
+ * Per-merchant rate limit for the admin dashboard metrics endpoints
+ * (summary/revenue/volume). These queries aggregate over the full payments
+ * table, so unrestricted polling can add significant load (issue #927).
+ */
+export function createDashboardMetricsRateLimit({
+  store,
+  rateLimitFactory = rateLimit,
+  max = DASHBOARD_METRICS_RATE_LIMIT_MAX,
+  windowMs = DASHBOARD_METRICS_RATE_LIMIT_WINDOW_MS,
+} = {}) {
+  return rateLimitFactory({
+    windowMs,
+    max,
+    message: {
+      error: "Too many dashboard requests, please try again later.",
+      code: "DASHBOARD_METRICS_RATE_LIMITED",
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { ip: false },
+    keyGenerator: getDashboardMetricsRateLimitKey,
     handler: (req, res, _next, options) => {
       setStandardRateLimitHeaders(res, req.rateLimit);
       res.status(options.statusCode).json(options.message);

@@ -17,6 +17,12 @@ import { isHorizonReachable } from "./lib/stellar.js";
 import { supabase } from "./lib/supabase.js";
 import { pool, closePool } from "./lib/db.js";
 import { validateEnvironmentVariables } from "./lib/env-validation.js";
+import {
+  getSecurityHeaders,
+  sanitizeRequest,
+  errorHandler,
+  rateLimiters,
+} from "./lib/security.js";
 import { formatZodError } from "./lib/request-schemas.js";
 import { idempotencyMiddleware } from "./lib/idempotency.js";
 import { closeRedisClient, connectRedisClient } from "./lib/redis.js";
@@ -47,6 +53,10 @@ const swaggerSpec = createSwaggerSpec({
   serverUrl: `http://localhost:${port}`,
 });
 
+// ============================================================================
+// SECURITY MIDDLEWARE (applied before routes)
+// ============================================================================
+
 // Attach a unique x-request-id to every request/response for tracing
 app.use((req, res, next) => {
   const requestId = (req.headers["x-request-id"] || randomUUID());
@@ -60,6 +70,13 @@ morgan.token("request-id", (req) => req.id);
 
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
+// Apply security headers first
+app.use(getSecurityHeaders());
+
+// Apply global rate limiting as early as possible
+app.use(rateLimiters.global);
+
+// CORS configuration
 const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(",").map((o) => o.trim())
   : ["http://localhost:3000"];
@@ -67,19 +84,39 @@ const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
 app.use(
   cors({
     origin: (origin, callback) => {
+      // Allow requests without origin (mobile apps, curl, etc)
       if (!origin) return callback(null, true);
+
       if (allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
+        // Log suspicious CORS violations
+        console.warn(`[SECURITY] CORS violation attempted from: ${origin}`);
         callback(new Error("Not allowed by CORS"));
       }
     },
     credentials: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "x-api-key"],
+    maxAge: 3600,
   })
 );
 
+// Body parsing with strict size limit
 app.use(express.json({ limit: "1mb" }));
-app.use(morgan(":request-id :method :url :status :response-time ms"));
+
+// Request sanitization
+app.use(sanitizeRequest);
+
+// Request logging with Morgan
+app.use(
+  morgan(":request-id :method :url :status :response-time ms")
+);
+
+// Swagger UI (only in development)
+if (process.env.NODE_ENV !== "production") {
+  app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 app.get("/health", async (req, res) => {
   try {
@@ -123,22 +160,43 @@ app.get("/health", async (req, res) => {
   }
 });
 
-app.use("/api/create-payment", requireApiKeyAuth());
-app.use("/api/create-payment", idempotencyMiddleware);
-app.use("/api/sessions", requireApiKeyAuth());
-app.use("/api/sessions", idempotencyMiddleware);
-app.use("/api/payments", requireApiKeyAuth());
-app.use("/api/rotate-key", requireApiKeyAuth());
+// ============================================================================
+// ROUTES
+// ============================================================================
 
-app.use("/api", merchantsRouter);
+// Apply authentication rate limiter to merchant registration
+app.post("/api/register-merchant", rateLimiters.auth);
+
+// Apply authentication rate limiter to key rotation
+app.post("/api/rotate-key", rateLimiters.auth, requireApiKeyAuth());
+
+// Apply API rate limiter to create-payment
+app.post("/api/create-payment", rateLimiters.api, requireApiKeyAuth());
+
+// Apply verification rate limiter to payment verification endpoints
+app.post("/api/verify-payment/:id", rateLimiters.verification);
+
+// Idempotency middleware for critical endpoints
+app.use("/api/create-payment", idempotencyMiddleware);
+app.use("/api/sessions", idempotencyMiddleware);
+
+// Mount routers
+app.use("/api", createPaymentsRouter());
+app.use("/api", createMerchantsRouter());
 app.use("/api", webhooksRouter);
 app.use("/api", metricsRouter);
+app.use("/api", authRouter);
 app.use("/api", auditRouter);
 
+// ============================================================================
+// ERROR HANDLING (must be last)
+// ============================================================================
+
+// Zod validation error handler
 app.use((err, req, res, next) => {
   if (err instanceof ZodError) {
     return res.status(400).json({
-      error: formatZodError(err), // Zod errors are client-side validation issues, safe to expose.
+      error: formatZodError(err),
     });
   }
 
@@ -146,19 +204,29 @@ app.use((err, req, res, next) => {
   let errorMessage;
 
   if (process.env.NODE_ENV === "production" && status >= 500) {
-    // For 5xx errors in production, return a generic message to avoid leaking internal details.
     errorMessage = "An unexpected error occurred. Please try again later.";
-    console.error("Unhandled Production Server Error:", err); // Log full error to server console.
+    console.error("Unhandled Production Server Error:", err);
   } else {
-    // For client errors (e.g., 4xx) or in development, expose the error message.
     errorMessage = err.message || "Internal Server Error";
-    console.error("Unhandled Error:", err); // Log full error to server console.
+    console.error("Unhandled Error:", err);
   }
 
   res.status(status).json({
     error: errorMessage,
   });
 });
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Not Found"
+
+// Global error handler (must be last)
+app.use(errorHandler);
+
+// ============================================================================
+// DATABASE AND SERVER STARTUP
+// ============================================================================
 
 // Verify pg pool reaches Postgres before accepting traffic
 pool
@@ -172,6 +240,7 @@ pool
 
 const server = app.listen(port, () => {
   console.log(`API listening on http://localhost:${port}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 // Graceful shutdown: drain in-flight queries then exit
