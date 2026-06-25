@@ -533,6 +533,9 @@ export const paymentService = {
     const paymentLinkBase = process.env.PAYMENT_LINK_BASE || "http://localhost:3000";
     const paymentLink = `${paymentLinkBase}/pay/${paymentId}`;
 
+    const network = (process.env.STELLAR_NETWORK || "testnet").toLowerCase();
+    const resolvedAssetIssuer = resolveAssetIssuer(asset, assetIssuer, network);
+
     logger.info(
       {
         paymentId,
@@ -552,9 +555,6 @@ export const paymentService = {
 
     const metadata = body.metadata && typeof body.metadata === "object" ? { ...body.metadata } : {};
     metadata.branding_config = resolvedBranding;
-
-    const network = (process.env.STELLAR_NETWORK || "testnet").toLowerCase();
-    const resolvedAssetIssuer = resolveAssetIssuer(asset, assetIssuer, network);
 
     const payload = {
       id: paymentId,

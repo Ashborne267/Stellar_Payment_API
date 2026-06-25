@@ -1,11 +1,14 @@
 /**
  * Comprehensive test suite for Asset Issuer Service
- * Tests: error recovery, rate limiting, signature verification, and SQL optimization
+ * Tests all four optimization tasks:
+ * - Issue #890: Error recovery
+ * - Issue #887: Rate limiting
+ * - Issue #888: Signature verification
+ * - Issue #889: SQL optimization
  */
 
-import { vi, describe, test, expect, beforeEach } from 'vitest';
+import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest';
 
-// Mock dependencies
 const {
     mockQueryWithRetry,
     mockVerifyTransactionSignature,
@@ -13,15 +16,24 @@ const {
     mockStellarServer,
     mockRateLimit,
     mockIpKeyGenerator,
+    mockLogger,
 } = vi.hoisted(() => ({
     mockQueryWithRetry: vi.fn(),
     mockVerifyTransactionSignature: vi.fn(),
     mockWithHorizonRetry: vi.fn(),
     mockStellarServer: vi.fn().mockImplementation(() => ({
         loadAccount: vi.fn(),
+        transactions: vi.fn().mockReturnThis(),
+        transaction: vi.fn().mockReturnThis(),
+        call: vi.fn(),
     })),
-    mockRateLimit: vi.fn(),
+    mockRateLimit: vi.fn(() => (req, res, next) => next()),
     mockIpKeyGenerator: vi.fn(),
+    mockLogger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+    },
 }));
 
 vi.mock('./db.js', () => ({ queryWithRetry: mockQueryWithRetry }));
@@ -30,95 +42,847 @@ vi.mock('./stellar.js', () => ({
     withHorizonRetry: mockWithHorizonRetry,
     isValidStellarAccountId: vi.fn().mockReturnValue(true),
     isValidAssetCode: vi.fn().mockReturnValue(true),
+    isValidStellarPublicKey: vi.fn().mockReturnValue(true),
 }));
 vi.mock('stellar-sdk', () => ({
     Horizon: { Server: mockStellarServer },
+    Networks: { PUBLIC: 'public', TESTNET: 'testnet' },
+    Transaction: vi.fn().mockImplementation(() => ({
+        operations: [],
+        signatures: [],
+    })),
+    Keypair: {
+        fromPublicKey: vi.fn().mockReturnValue({
+            verify: vi.fn().mockReturnValue(true),
+        }),
+    },
 }));
 vi.mock('express-rate-limit', () => ({ default: mockRateLimit, ipKeyGenerator: mockIpKeyGenerator }));
+vi.mock('./logger.js', () => ({ logger: mockLogger }));
+vi.mock('./rate-limit.js', () => ({
+    createRedisRateLimitStore: vi.fn(),
+    RATE_LIMIT_REDIS_PREFIX: 'rl:',
+}));
 
-// Import the modules
 import {
     AssetIssuerErrorRecovery,
     AssetIssuerRateLimiter,
     AssetIssuerSignatureVerifier,
-    AssetIssuerQueryOptimizer
+    AssetIssuerQueryOptimizer,
+    AssetIssuerManager,
+    assetIssuerManager,
+    createAssetIssuerRateLimits,
 } from './asset-issuer.js';
 import { queryWithRetry } from './db.js';
 import { withHorizonRetry } from './stellar.js';
 
-describe('Asset Issuer - Task #756: Error Recovery', () => {
+// ============================================================================
+// Issue #890: Enhanced Error Recovery
+// ============================================================================
+describe('AssetIssuerErrorRecovery (Issue #890)', () => {
     beforeEach(() => {
         AssetIssuerErrorRecovery.resetCircuitBreaker();
         vi.clearAllMocks();
     });
 
-    test('should execute operation successfully on first try', async () => {
-        const mockOperation = vi.fn().mockResolvedValue('success');
-        const result = await AssetIssuerErrorRecovery.executeWithRecovery(mockOperation);
-        expect(result).toBe('success');
-        expect(mockOperation).toHaveBeenCalledTimes(1);
+    describe('executeWithRecovery', () => {
+        test('should execute operation successfully on first try', async () => {
+            const mockOperation = vi.fn().mockResolvedValue('success');
+            const result = await AssetIssuerErrorRecovery.executeWithRecovery(mockOperation);
+            expect(result).toBe('success');
+            expect(mockOperation).toHaveBeenCalledTimes(1);
+        });
+
+        test('should retry on retryable network errors', async () => {
+            const mockOperation = vi.fn()
+                .mockRejectedValueOnce(new Error('network timeout'))
+                .mockResolvedValue('success');
+
+            const result = await AssetIssuerErrorRecovery.executeWithRecovery(mockOperation);
+            expect(result).toBe('success');
+            expect(mockOperation).toHaveBeenCalledTimes(2);
+        }, 30000);
+
+        test('should retry up to MAX_RETRY_ATTEMPTS then fail', async () => {
+            const mockOperation = vi.fn().mockRejectedValue(new Error('network error'));
+            await expect(
+                AssetIssuerErrorRecovery.executeWithRecovery(mockOperation)
+            ).rejects.toThrow('network error');
+            expect(mockOperation).toHaveBeenCalledTimes(3);
+        }, 30000);
+
+        test('should not retry non-retryable client errors (4xx)', async () => {
+            const error = new Error('bad request');
+            error.status = 400;
+            const mockOperation = vi.fn().mockRejectedValue(error);
+            await expect(
+                AssetIssuerErrorRecovery.executeWithRecovery(mockOperation)
+            ).rejects.toThrow('bad request');
+            expect(mockOperation).toHaveBeenCalledTimes(1);
+        });
+
+        test('should not retry auth errors (401, 403)', async () => {
+            const error = new Error('unauthorized');
+            error.status = 401;
+            const mockOperation = vi.fn().mockRejectedValue(error);
+            await expect(
+                AssetIssuerErrorRecovery.executeWithRecovery(mockOperation)
+            ).rejects.toThrow('unauthorized');
+            expect(mockOperation).toHaveBeenCalledTimes(1);
+        });
+
+        test('should throw immediately when circuit breaker is open (using non-retryable errors)', async () => {
+            const error = new Error('bad request');
+            error.status = 400;
+            const mockOperation = vi.fn().mockRejectedValue(error);
+
+            // Non-retryable errors fail immediately without retries
+            // so we can quickly reach the circuit breaker threshold
+            for (let i = 0; i < 5; i++) {
+                await expect(
+                    AssetIssuerErrorRecovery.executeWithRecovery(mockOperation, 'cb_test')
+                ).rejects.toThrow('bad request');
+            }
+
+            await expect(
+                AssetIssuerErrorRecovery.executeWithRecovery(mockOperation, 'cb_test')
+            ).rejects.toThrow('Circuit breaker is open');
+        });
+
+        test('circuit breaker should be per-context isolated', async () => {
+            const error = new Error('bad request');
+            error.status = 400;
+            const failingOp = vi.fn().mockRejectedValue(error);
+            const succeedingOp = vi.fn().mockResolvedValue('ok');
+
+            for (let i = 0; i < 5; i++) {
+                await expect(
+                    AssetIssuerErrorRecovery.executeWithRecovery(failingOp, 'context_a')
+                ).rejects.toThrow();
+            }
+
+            const result = await AssetIssuerErrorRecovery.executeWithRecovery(succeedingOp, 'context_b');
+            expect(result).toBe('ok');
+        });
+
+        test('should invoke fallback for non-retryable errors', async () => {
+            const error = new Error('bad request');
+            error.status = 400;
+            const mockOperation = vi.fn().mockRejectedValue(error);
+            const fallback = vi.fn().mockResolvedValue('fallback_result');
+
+            const result = await AssetIssuerErrorRecovery.executeWithRecovery(
+                mockOperation,
+                'test context',
+                { fallback }
+            );
+            expect(result).toBe('fallback_result');
+        });
+
+        test('should invoke fallback after retries exhausted for retryable errors', async () => {
+            const mockOperation = vi.fn().mockRejectedValue(new Error('network error'));
+            const fallback = vi.fn().mockResolvedValue('fallback_result');
+
+            const promise = AssetIssuerErrorRecovery.executeWithRecovery(
+                mockOperation,
+                'test context',
+                { fallback }
+            );
+            const result = await promise;
+            expect(result).toBe('fallback_result');
+        }, 30000);
+
+        test('should timeout long-running operations', async () => {
+            const slowOp = vi.fn().mockImplementation(
+                () => new Promise(resolve => setTimeout(resolve, 500))
+            );
+            await expect(
+                AssetIssuerErrorRecovery.executeWithRecovery(slowOp, 'test', { timeoutMs: 50 })
+            ).rejects.toThrow('timed out');
+        }, 30000);
     });
 
-    test('should retry on retryable network errors', async () => {
-        const mockOperation = vi.fn()
-            .mockRejectedValueOnce(new Error('network timeout'))
-            .mockResolvedValue('success');
+    describe('error classification', () => {
+        test('should classify network errors as retryable high priority', () => {
+            const result = AssetIssuerErrorRecovery.classifyError(new Error('network timeout'));
+            expect(result.retryable).toBe(true);
+            expect(result.priority).toBe('high');
+        });
 
-        const result = await AssetIssuerErrorRecovery.executeWithRecovery(mockOperation);
-        expect(result).toBe('success');
-        expect(mockOperation).toHaveBeenCalledTimes(2);
+        test('should classify 429 rate limit as retryable low priority', () => {
+            const error = new Error('rate limit');
+            error.status = 429;
+            const result = AssetIssuerErrorRecovery.classifyError(error);
+            expect(result.retryable).toBe(true);
+            expect(result.priority).toBe('low');
+        });
+
+        test('should classify 503 server error as retryable with correct type', () => {
+            const error = new Error('internal error');
+            error.status = 503;
+            const result = AssetIssuerErrorRecovery.classifyError(error);
+            expect(result.retryable).toBe(true);
+            expect(result.type).toBe('network');
+        });
+
+        test('should classify 404 with asset context as asset_not_found', () => {
+            const error = new Error('asset issuer not found');
+            error.status = 404;
+            const result = AssetIssuerErrorRecovery.classifyError(error);
+            expect(result.retryable).toBe(false);
+            expect(result.type).toBe('asset_not_found');
+        });
+
+        test('should classify generic 404 as not_found', () => {
+            const error = new Error('not found');
+            error.status = 404;
+            const result = AssetIssuerErrorRecovery.classifyError(error);
+            expect(result.retryable).toBe(false);
+            expect(result.type).toBe('not_found');
+        });
+
+        test('should classify timeout errors', () => {
+            const error = new Error('timed out');
+            error.isTimeout = true;
+            const result = AssetIssuerErrorRecovery.classifyError(error);
+            expect(result.retryable).toBe(true);
+            expect(result.priority).toBe('high');
+        });
+
+        test('should classify validation errors as non-retryable', () => {
+            const result = AssetIssuerErrorRecovery.classifyError(new Error('Invalid asset issuer'));
+            expect(result.retryable).toBe(false);
+            expect(result.type).toBe('validation_error');
+        });
     });
 
-    test('should open circuit breaker after multiple failures', async () => {
-        const mockOperation = vi.fn().mockRejectedValue(new Error('server error'));
+    describe('dead letter queue', () => {
+        test('should push failed operations to DLQ', async () => {
+            const error = new Error('bad request');
+            error.status = 400;
+            const mockOperation = vi.fn().mockRejectedValue(error);
 
-        // Trigger 5 failures to open circuit breaker
-        for (let i = 0; i < 5; i++) {
-            await expect(AssetIssuerErrorRecovery.executeWithRecovery(mockOperation)).rejects.toThrow();
-        }
+            await expect(
+                AssetIssuerErrorRecovery.executeWithRecovery(mockOperation, 'dlq_test')
+            ).rejects.toThrow();
 
-        await expect(
-            AssetIssuerErrorRecovery.executeWithRecovery(mockOperation)
-        ).rejects.toThrow('Circuit breaker is open');
+            const dlq = AssetIssuerErrorRecovery.getDeadLetterQueue();
+            expect(dlq.length).toBeGreaterThan(0);
+            expect(dlq[dlq.length - 1].context).toBe('dlq_test');
+        });
+
+        test('should drain dead letter queue', () => {
+            const drained = AssetIssuerErrorRecovery.drainDeadLetterQueue();
+            expect(Array.isArray(drained)).toBe(true);
+            expect(AssetIssuerErrorRecovery.getDeadLetterQueue().length).toBe(0);
+        });
     });
 
-    test('should verify issuer existence on-chain', async () => {
-        mockWithHorizonRetry.mockResolvedValue({ id: 'GBXX' });
-        const result = await AssetIssuerErrorRecovery.verifyIssuerOnChain('GBXX');
-        expect(result).toBe(true);
+    describe('calculateRetryDelay', () => {
+        test('should return increasing delays with jitter', () => {
+            const delay1 = AssetIssuerErrorRecovery.calculateRetryDelay(1, 'high');
+            const delay2 = AssetIssuerErrorRecovery.calculateRetryDelay(2, 'high');
+            expect(delay2).toBeGreaterThan(delay1);
+            expect(delay1).toBeGreaterThan(0);
+            expect(delay2).toBeLessThanOrEqual(30000);
+        });
     });
 
-    test('should return false if issuer not found (404)', async () => {
-        const error = new Error('not found');
-        error.status = 404;
-        mockWithHorizonRetry.mockRejectedValue(error);
-        const result = await AssetIssuerErrorRecovery.verifyIssuerOnChain('GBXX');
-        expect(result).toBe(false);
+    describe('verifyIssuerOnChain', () => {
+        test('should verify issuer existence on-chain', async () => {
+            mockWithHorizonRetry.mockResolvedValue({ id: 'GBXX' });
+            const result = await AssetIssuerErrorRecovery.verifyIssuerOnChain('GBXX');
+            expect(result).toBe(true);
+        });
+
+        test('should return false if issuer not found (404)', async () => {
+            const error = new Error('not found');
+            error.status = 404;
+            mockWithHorizonRetry.mockRejectedValue(error);
+            const result = await AssetIssuerErrorRecovery.verifyIssuerOnChain('GBXX');
+            expect(result).toBe(false);
+        });
+    });
+
+    describe('circuit breaker metrics', () => {
+        test('should return circuit breaker metrics snapshot', () => {
+            const metrics = AssetIssuerErrorRecovery.getCircuitBreakerMetrics();
+            expect(typeof metrics).toBe('object');
+        });
     });
 });
 
-describe('Asset Issuer - Task #755: Rate Limiting', () => {
-    test('should generate correct rate limit key', () => {
-        const req = { merchant: { id: 'M1' } };
-        const key = AssetIssuerRateLimiter.getKey(req);
-        expect(key).toBe('asset:issuer:M1');
+// ============================================================================
+// Issue #887: Rate Limiting
+// ============================================================================
+describe('AssetIssuerRateLimiter (Issue #887)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
     });
 
-    test('should use IP fallback for rate limit key', () => {
-        const req = { ip: '1.2.3.4' };
-        mockIpKeyGenerator.mockReturnValue('1.2.3.4');
-        const key = AssetIssuerRateLimiter.getKey(req);
-        expect(key).toBe('asset:issuer:ip:1.2.3.4');
+    describe('getKey', () => {
+        test('should generate key using merchant ID when available', () => {
+            const req = { merchant: { id: 'M1' } };
+            const key = AssetIssuerRateLimiter.getKey(req);
+            expect(key).toBe('asset:issuer:merchant:M1');
+        });
+
+        test('should generate key using API key hash when no merchant', () => {
+            const req = {
+                headers: { 'x-api-key': 'sk_test_1234567890abcdef' },
+                ip: '1.2.3.4',
+            };
+            const key = AssetIssuerRateLimiter.getKey(req);
+            expect(key).toMatch(/^asset:issuer:api:[a-f0-9]{16}$/);
+        });
+
+        test('should use IP fallback when no merchant or API key', () => {
+            const req = { ip: '1.2.3.4' };
+            mockIpKeyGenerator.mockReturnValue('1.2.3.4');
+            const key = AssetIssuerRateLimiter.getKey(req);
+            expect(key).toBe('asset:issuer:ip:1.2.3.4');
+        });
+    });
+
+    describe('getBurstKey', () => {
+        test('should generate burst key with burst prefix', () => {
+            const req = { merchant: { id: 'M1' } };
+            const key = AssetIssuerRateLimiter.getBurstKey(req);
+            expect(key).toBe('asset:issuer:burst:merchant:M1');
+        });
+    });
+
+    describe('createRateLimiter', () => {
+        test('should create rate limiter with correct config', () => {
+            AssetIssuerRateLimiter.createRateLimiter();
+            expect(mockRateLimit).toHaveBeenCalled();
+            const callArg = mockRateLimit.mock.calls[0][0];
+            expect(callArg.windowMs).toBe(5 * 60 * 1000);
+            expect(callArg.max).toBe(50);
+            expect(callArg.standardHeaders).toBe(true);
+            expect(callArg.passOnStoreError).toBe(true);
+        });
+
+        test('should skip rate limiting for enterprise merchants', () => {
+            const mockReq = { merchant: { metadata: { tier: 'enterprise' } } };
+            AssetIssuerRateLimiter.createRateLimiter();
+            const callArg = mockRateLimit.mock.calls[0][0];
+            const result = callArg.skip(mockReq);
+            expect(result).toBe(true);
+        });
+
+        test('should not skip rate limiting for regular merchants', () => {
+            const mockReq = { merchant: { id: 'M1' } };
+            AssetIssuerRateLimiter.createRateLimiter();
+            const callArg = mockRateLimit.mock.calls[0][0];
+            const result = callArg.skip(mockReq);
+            expect(result).toBe(false);
+        });
+    });
+
+    describe('createBurstRateLimiter', () => {
+        test('should create burst rate limiter with correct config', () => {
+            AssetIssuerRateLimiter.createBurstRateLimiter();
+            expect(mockRateLimit).toHaveBeenCalled();
+            const callArg = mockRateLimit.mock.calls[0][0];
+            expect(callArg.windowMs).toBe(10 * 1000);
+            expect(callArg.max).toBe(10);
+        });
+    });
+
+    describe('handler', () => {
+        test('should log and return 429 on rate limit exceeded', () => {
+            AssetIssuerRateLimiter.createRateLimiter();
+            const callArg = mockRateLimit.mock.calls[0][0];
+            const mockReq = { ip: '1.2.3.4', merchant: {}, headers: {} };
+            const mockRes = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+            callArg.handler(mockReq, mockRes, vi.fn(), { max: 50, windowMs: 300000 });
+            expect(mockLogger.warn).toHaveBeenCalled();
+            expect(mockRes.status).toHaveBeenCalledWith(429);
+        });
     });
 });
 
-describe('Asset Issuer - Task #753: SQL Optimizations', () => {
-    test('should fetch issuer statistics', async () => {
-        const mockRows = [{ asset: 'USDC', payment_count: 5 }];
-        mockQueryWithRetry.mockResolvedValue({ rows: mockRows });
+// ============================================================================
+// Issue #888: Cryptographic Signature Verification
+// ============================================================================
+describe('AssetIssuerSignatureVerifier (Issue #888)', () => {
+    let verifier;
 
-        const result = await AssetIssuerQueryOptimizer.getIssuerStats('GBXX');
-        expect(result.rows).toBe(mockRows);
-        expect(mockQueryWithRetry).toHaveBeenCalledWith(expect.stringContaining('asset_issuer = $1'), ['GBXX']);
+    beforeEach(() => {
+        verifier = new AssetIssuerSignatureVerifier();
+        vi.clearAllMocks();
+    });
+
+    describe('verifyOperation', () => {
+        test('should return valid result when signature is valid', async () => {
+            mockVerifyTransactionSignature.mockResolvedValue({
+                valid: true,
+                reason: 'Signature verified',
+                isMultiSig: false,
+                signatureCount: 1,
+                thresholdMet: true,
+            });
+
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const mockTransaction = {
+                operations: [{
+                    type: 'payment',
+                    asset: {
+                        isNative: () => false,
+                        getCode: () => 'USDC',
+                        getIssuer: () => 'GBXX',
+                    },
+                    amount: '100',
+                }],
+            };
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => mockTransaction);
+
+            const result = await verifier.verifyOperation('txHash123');
+            expect(result.valid).toBe(true);
+            expect(result.assetIssuerSpecific).toBe(true);
+        });
+
+        test('should return invalid when basic verification fails', async () => {
+            mockVerifyTransactionSignature.mockResolvedValue({
+                valid: false,
+                reason: 'Invalid signature',
+                isMultiSig: false,
+                signatureCount: 0,
+                thresholdMet: false,
+            });
+
+            const result = await verifier.verifyOperation('txHash123');
+            expect(result.valid).toBe(false);
+            expect(result.reason).toContain('Basic signature verification failed');
+        });
+
+        test('should use cache on repeated calls', async () => {
+            mockVerifyTransactionSignature.mockResolvedValue({
+                valid: true,
+                reason: 'Signature verified',
+                isMultiSig: false,
+                signatureCount: 1,
+                thresholdMet: true,
+            });
+
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{ type: 'payment', asset: { isNative: () => false, getCode: () => 'USDC', getIssuer: () => 'GBXX' }, amount: '100' }],
+            }));
+
+            await verifier.verifyOperation('txHash123');
+            await verifier.verifyOperation('txHash123');
+
+            expect(mockVerifyTransactionSignature).toHaveBeenCalledTimes(1);
+        });
+
+        test('should skip cache when skipCache is true', async () => {
+            mockVerifyTransactionSignature.mockResolvedValue({
+                valid: true,
+                reason: 'Signature verified',
+                isMultiSig: false,
+                signatureCount: 1,
+                thresholdMet: true,
+            });
+
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{ type: 'payment', asset: { isNative: () => false, getCode: () => 'USDC', getIssuer: () => 'GBXX' }, amount: '100' }],
+            }));
+
+            await verifier.verifyOperation('txHash123', { skipCache: true });
+            await verifier.verifyOperation('txHash123', { skipCache: true });
+
+            expect(mockVerifyTransactionSignature).toHaveBeenCalledTimes(2);
+        });
+
+        test('should clear cache', () => {
+            verifier.verificationCache.set('test', 'value');
+            verifier.clearCache();
+            expect(verifier.verificationCache.size).toBe(0);
+        });
+    });
+
+    describe('verifyAssetIssuerOperation', () => {
+        test('should detect no operations in transaction', async () => {
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({ operations: [] }));
+
+            const result = await verifier.verifyAssetIssuerOperation('txHash123');
+            expect(result.valid).toBe(false);
+            expect(result.reason).toContain('No operations found');
+        });
+
+        test('should extract asset info from payment operations', async () => {
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{
+                    type: 'payment',
+                    asset: {
+                        isNative: () => false,
+                        getCode: () => 'USDC',
+                        getIssuer: () => 'GBXX',
+                    },
+                    amount: '100',
+                }],
+            }));
+
+            const result = await verifier.verifyAssetIssuerOperation('txHash123');
+            expect(result.valid).toBe(true);
+            expect(result.assetCode).toBe('USDC');
+            expect(result.assetIssuer).toBe('GBXX');
+            expect(result.operationType).toBe('payment');
+        });
+
+        test('should handle native XLM asset', async () => {
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{
+                    type: 'payment',
+                    asset: {
+                        isNative: () => true,
+                    },
+                    amount: '100',
+                }],
+            }));
+
+            const result = await verifier.verifyAssetIssuerOperation('txHash123');
+            expect(result.valid).toBe(true);
+            expect(result.assetCode).toBe('XLM');
+        });
+
+        test('should detect operation type mismatch', async () => {
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{
+                    type: 'payment',
+                    asset: {
+                        isNative: () => false,
+                        getCode: () => 'USDC',
+                        getIssuer: () => 'GBXX',
+                    },
+                    amount: '100',
+                }],
+            }));
+
+            const result = await verifier.verifyAssetIssuerOperation('txHash123', 'changeTrust');
+            expect(result.valid).toBe(false);
+            expect(result.reason).toContain('Operation type mismatch');
+        });
+
+        test('should detect asset code mismatch', async () => {
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{
+                    type: 'payment',
+                    asset: {
+                        isNative: () => false,
+                        getCode: () => 'USDC',
+                        getIssuer: () => 'GBXX',
+                    },
+                    amount: '100',
+                }],
+            }));
+
+            const result = await verifier.verifyAssetIssuerOperation('txHash123', null, 'ETH');
+            expect(result.valid).toBe(false);
+            expect(result.reason).toContain('Asset code mismatch');
+        });
+
+        test('should detect asset issuer mismatch', async () => {
+            mockWithHorizonRetry.mockResolvedValue({
+                envelope_xdr: 'AAAA...',
+                source_account: 'GBXX',
+            });
+
+            const { Transaction } = await import('stellar-sdk');
+            Transaction.mockImplementation(() => ({
+                operations: [{
+                    type: 'payment',
+                    asset: {
+                        isNative: () => false,
+                        getCode: () => 'USDC',
+                        getIssuer: () => 'GAXX',
+                    },
+                    amount: '100',
+                }],
+            }));
+
+            const result = await verifier.verifyAssetIssuerOperation('txHash123', null, null, 'GBYY');
+            expect(result.valid).toBe(false);
+            expect(result.reason).toContain('Asset issuer mismatch');
+        });
+    });
+});
+
+// ============================================================================
+// Issue #889: Optimized SQL Queries
+// ============================================================================
+describe('AssetIssuerQueryOptimizer (Issue #889)', () => {
+    beforeEach(() => {
+        AssetIssuerErrorRecovery.resetCircuitBreaker();
+        vi.clearAllMocks();
+    });
+
+    describe('getIssuerStats', () => {
+        test('should fetch issuer statistics with aggregation', async () => {
+            const mockRows = [{
+                asset: 'USDC',
+                payment_count: 5,
+                total_volume: '1000',
+                confirmed_count: 4,
+                failed_count: 1,
+            }];
+            mockQueryWithRetry.mockResolvedValue({ rows: mockRows });
+
+            const result = await AssetIssuerQueryOptimizer.getIssuerStats('GBXX');
+            expect(result.rows).toBe(mockRows);
+            expect(mockQueryWithRetry).toHaveBeenCalledWith(
+                expect.stringContaining('asset_issuer = $1'),
+                ['GBXX']
+            );
+        });
+
+        test('should include confirmed and failed counts', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [] });
+            await AssetIssuerQueryOptimizer.getIssuerStats('GBXX');
+            const query = mockQueryWithRetry.mock.calls[0][0];
+            expect(query).toContain("status = 'confirmed'");
+            expect(query).toContain("status = 'failed'");
+        });
+    });
+
+    describe('findPaymentsByAssetAndIssuer', () => {
+        test('should filter by asset code and issuer', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [] });
+            await AssetIssuerQueryOptimizer.findPaymentsByAssetAndIssuer('USDC', 'GBXX');
+            const query = mockQueryWithRetry.mock.calls[0][0];
+            const params = mockQueryWithRetry.mock.calls[0][1];
+            expect(query).toContain('p.asset = $');
+            expect(query).toContain('p.asset_issuer = $');
+            expect(params).toContain('USDC');
+            expect(params).toContain('GBXX');
+        });
+
+        test('should support additional filter options', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [] });
+            await AssetIssuerQueryOptimizer.findPaymentsByAssetAndIssuer('USDC', 'GBXX', {
+                status: 'confirmed',
+                limit: 10,
+                offset: 5,
+                merchantId: 'M1',
+            });
+            const query = mockQueryWithRetry.mock.calls[0][0];
+            expect(query).toContain('p.merchant_id = $');
+            expect(query).toContain('p.status = $');
+            expect(query).toContain('LIMIT $');
+            expect(query).toContain('OFFSET $');
+        });
+
+        test('should handle date range filtering', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [] });
+            await AssetIssuerQueryOptimizer.findPaymentsByAssetAndIssuer('USDC', 'GBXX', {
+                dateFrom: '2026-01-01',
+                dateTo: '2026-06-01',
+            });
+            const query = mockQueryWithRetry.mock.calls[0][0];
+            expect(query).toContain('p.created_at >=');
+            expect(query).toContain('p.created_at <=');
+        });
+
+        test('should handle NULL asset issuer for native assets', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [] });
+            await AssetIssuerQueryOptimizer.findPaymentsByAssetAndIssuer('XLM', '');
+            const query = mockQueryWithRetry.mock.calls[0][0];
+            expect(query).toContain('p.asset_issuer IS NULL');
+        });
+    });
+
+    describe('validateIssuerAgainstMerchant', () => {
+        test('should validate issuer against merchant allowed issuers', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [{ id: 'M1', issuer_allowed: true }] });
+            const result = await AssetIssuerQueryOptimizer.validateIssuerAgainstMerchant('M1', 'USDC', 'GBXX');
+            expect(result.rows[0].issuer_allowed).toBe(true);
+        });
+    });
+
+    describe('getAssetIssuerHealthMetrics', () => {
+        test('should return health metrics with failure rates', async () => {
+            mockQueryWithRetry.mockResolvedValue({
+                rows: [{
+                    asset: 'USDC',
+                    asset_issuer: 'GBXX',
+                    total_payments: 100,
+                    failed_payments: 5,
+                    failure_rate_percent: 5.00,
+                    total_volume: '5000',
+                }]
+            });
+            const result = await AssetIssuerQueryOptimizer.getAssetIssuerHealthMetrics('M1');
+            expect(result.rows[0].failure_rate_percent).toBe(5.00);
+        });
+    });
+
+    describe('logAssetIssuerVerification', () => {
+        test('should insert verification log record', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [{ id: 'log1', created_at: new Date() }] });
+            const result = await AssetIssuerQueryOptimizer.logAssetIssuerVerification({
+                merchantId: 'M1',
+                txHash: 'abc123',
+                verification: {
+                    valid: true,
+                    operationType: 'payment',
+                    isMultiSig: false,
+                    signatureCount: 1,
+                    thresholdMet: true,
+                },
+                assetCode: 'USDC',
+                assetIssuer: 'GBXX',
+            });
+            expect(result.rows[0].id).toBe('log1');
+        });
+    });
+
+    describe('createOptimizedIndexes', () => {
+        test('should attempt to create indexes', async () => {
+            mockQueryWithRetry.mockResolvedValue({ rows: [] });
+            const results = await AssetIssuerQueryOptimizer.createOptimizedIndexes();
+            expect(results.length).toBe(4);
+            expect(results.every(r => r.success === true)).toBe(true);
+        });
+
+        test('should handle index creation errors gracefully', async () => {
+            mockQueryWithRetry
+                .mockResolvedValueOnce({ rows: [] })
+                .mockRejectedValueOnce(new Error('index already exists'))
+                .mockResolvedValueOnce({ rows: [] })
+                .mockResolvedValueOnce({ rows: [] });
+            const results = await AssetIssuerQueryOptimizer.createOptimizedIndexes();
+            expect(results.some(r => !r.success)).toBe(true);
+        });
+    });
+});
+
+// ============================================================================
+// AssetIssuerManager Integration
+// ============================================================================
+describe('AssetIssuerManager', () => {
+    beforeEach(() => {
+        AssetIssuerErrorRecovery.resetCircuitBreaker();
+        vi.clearAllMocks();
+    });
+
+    test('should be a singleton instance', () => {
+        expect(assetIssuerManager).toBeDefined();
+        expect(assetIssuerManager).toBeInstanceOf(AssetIssuerManager);
+    });
+
+    test('should have all four components initialized', () => {
+        const mgr = new AssetIssuerManager();
+        expect(mgr.signatureVerifier).toBeDefined();
+        expect(mgr.rateLimiter).toBeDefined();
+        expect(mgr.errorRecovery).toBeDefined();
+        expect(mgr.queryOptimizer).toBeDefined();
+    });
+
+    test('verifyAssetIssuerTransaction should orchestrate verification', async () => {
+        mockVerifyTransactionSignature.mockResolvedValue({
+            valid: true,
+            reason: 'Signature verified',
+            isMultiSig: false,
+            signatureCount: 1,
+            thresholdMet: true,
+        });
+
+        mockWithHorizonRetry.mockResolvedValue({
+            envelope_xdr: 'AAAA...',
+            source_account: 'GBXX',
+        });
+
+        const { Transaction } = await import('stellar-sdk');
+        Transaction.mockImplementation(() => ({
+            operations: [{
+                type: 'payment',
+                asset: { isNative: () => false, getCode: () => 'USDC', getIssuer: () => 'GBXX' },
+                amount: '100',
+            }],
+        }));
+
+        const result = await assetIssuerManager.verifyAssetIssuerTransaction('txHash123');
+        expect(result.valid).toBe(true);
+    });
+
+    test('getMerchantIssuerConfig should return health data', async () => {
+        mockQueryWithRetry.mockResolvedValue({ rows: [] });
+        const config = await assetIssuerManager.getMerchantIssuerConfig('M1');
+        expect(config.healthMetrics).toBeDefined();
+        expect(config.circuitBreakers).toBeDefined();
+        expect(config.timestamp).toBeDefined();
+    });
+
+    test('getCircuitBreakerMetrics should return metrics', () => {
+        const metrics = assetIssuerManager.getCircuitBreakerMetrics();
+        expect(typeof metrics).toBe('object');
+    });
+
+    test('getDeadLetterQueue should return queue', () => {
+        const dlq = assetIssuerManager.getDeadLetterQueue();
+        expect(Array.isArray(dlq)).toBe(true);
+    });
+
+    test('initialize should create indexes', async () => {
+        mockQueryWithRetry.mockResolvedValue({ rows: [] });
+        const result = await assetIssuerManager.initialize();
+        expect(result.success).toBe(true);
+    });
+});
+
+describe('createAssetIssuerRateLimits', () => {
+    test('should create standard and burst rate limiters', () => {
+        const limits = createAssetIssuerRateLimits({ isOpen: true, sendCommand: vi.fn() });
+        expect(limits.standard).toBeDefined();
+        expect(limits.burst).toBeDefined();
     });
 });
