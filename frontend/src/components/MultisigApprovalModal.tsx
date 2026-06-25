@@ -100,20 +100,48 @@ export default function MultisigApprovalModal({
     }
   }, [isOpen, initialTransaction, transaction, setTransaction]);
 
-  // Handle escape key and focus management
+  // Handle escape key, focus trap, and focus return
   useEffect(() => {
     if (!isOpen) return;
+
+    const triggerElement = document.activeElement as HTMLElement | null;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         handleClose();
+        return;
+      }
+
+      if (e.key === "Tab" && modalRef.current) {
+        const focusable = modalRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusable.length === 0) return;
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey) {
+          if (document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     modalRef.current?.focus();
 
-    return () => document.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      triggerElement?.focus();
+    };
   }, [isOpen]);
 
   // Body scroll lock
@@ -426,6 +454,7 @@ export default function MultisigApprovalModal({
             tabIndex={-1}
             role="dialog"
             aria-modal="true"
+            aria-busy={isLoading}
             aria-labelledby="multisig-modal-title"
             aria-describedby="multisig-modal-description"
           >
@@ -451,6 +480,21 @@ export default function MultisigApprovalModal({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </motion.button>
+            </div>
+
+            {/* Screen reader announcements */}
+            <div
+              aria-live="assertive"
+              aria-atomic="true"
+              className="sr-only"
+            >
+              {currentStep === "processing"
+                ? "Processing your transaction. Please wait."
+                : currentStep === "confirm"
+                ? "Transaction approved successfully."
+                : currentStep === "error"
+                ? "Transaction failed. See error details below."
+                : ""}
             </div>
 
             {/* Content */}
