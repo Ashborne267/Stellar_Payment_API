@@ -520,4 +520,139 @@ describe("MultisigApprovalModal Component", () => {
       expect(copyButtons.length).toBeGreaterThan(0);
     });
   });
+
+  describe("Edge Cases", () => {
+    it("handles empty signers list gracefully", () => {
+      const noSignersTransaction = {
+        ...mockTransaction,
+        signers: [],
+      };
+      renderWithProvider({ transaction: noSignersTransaction });
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+      expect(screen.getByText(/Transaction must have at least one signer/i)).toBeInTheDocument();
+    });
+
+    it("handles single signer correctly", () => {
+      const singleSignerTransaction = {
+        ...mockTransaction,
+        signers: [
+          { id: "signer1", publicKey: "G123...", name: "Alice", weight: 1, hasSigned: false },
+        ],
+        minSignatures: 1,
+      };
+      renderWithProvider({ transaction: singleSignerTransaction });
+
+      const signButtons = screen.getAllByText("Sign");
+      expect(signButtons).toHaveLength(1);
+      expect(screen.getByText("Signatures (0/1)")).toBeInTheDocument();
+    });
+
+    it("shows all signers as signed when pre-signed", () => {
+      const allSignedTransaction = {
+        ...mockTransaction,
+        signers: [
+          { id: "signer1", publicKey: "G123...", name: "Alice", weight: 1, hasSigned: true },
+          { id: "signer2", publicKey: "G456...", name: "Bob", weight: 1, hasSigned: true },
+        ],
+      };
+      renderWithProvider({ transaction: allSignedTransaction });
+
+      const signedButtons = screen.getAllByText("Signed");
+      expect(signedButtons).toHaveLength(2);
+      expect(screen.getByText("Submit Transaction")).toBeInTheDocument();
+    });
+  });
+
+  describe("Component Cleanup", () => {
+    it("restores body overflow on unmount", () => {
+      const { unmount } = renderWithProvider({ isOpen: true });
+      expect(document.body.style.overflow).toBe("hidden");
+      unmount();
+      expect(document.body.style.overflow).toBe("");
+    });
+  });
+
+  describe("Loading Interaction Guards", () => {
+    it("disables close button during loading", async () => {
+      renderWithProvider();
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      const closeButton = screen.getByLabelText("Close modal");
+      expect(closeButton).toBeDisabled();
+
+      await waitFor(() => {
+        expect(closeButton).not.toBeDisabled();
+      }, { timeout: 2000 });
+    });
+
+    it("prevents backdrop close during loading", async () => {
+      const mockOnClose = jest.fn();
+      renderWithProvider({ onClose: mockOnClose });
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      const backdrop = screen.getByText("Multi-Signature Approval")
+        .closest('[role="dialog"]')?.previousSibling as HTMLElement;
+      if (backdrop) {
+        fireEvent.click(backdrop);
+      }
+
+      expect(mockOnClose).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Render Boundary States", () => {
+    it("renders without crashing when transaction is null", () => {
+      renderWithProvider({ transaction: null });
+
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+      expect(screen.getByText("Review Transaction")).toBeInTheDocument();
+      expect(screen.queryByText("100 USDC")).not.toBeInTheDocument();
+    });
+
+    it("reopens correctly after being closed", () => {
+      const mockOnClose = jest.fn();
+      const { rerender } = render(
+        <MultisigProvider networkPassphrase="Test Network">
+          <MultisigApprovalModal
+            isOpen={true}
+            onClose={mockOnClose}
+            networkPassphrase="Test Network"
+            transaction={mockTransaction}
+          />
+        </MultisigProvider>
+      );
+
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+
+      rerender(
+        <MultisigProvider networkPassphrase="Test Network">
+          <MultisigApprovalModal
+            isOpen={false}
+            onClose={mockOnClose}
+            networkPassphrase="Test Network"
+            transaction={mockTransaction}
+          />
+        </MultisigProvider>
+      );
+
+      expect(screen.queryByText("Multi-Signature Approval")).not.toBeInTheDocument();
+
+      rerender(
+        <MultisigProvider networkPassphrase="Test Network">
+          <MultisigApprovalModal
+            isOpen={true}
+            onClose={mockOnClose}
+            networkPassphrase="Test Network"
+            transaction={mockTransaction}
+          />
+        </MultisigProvider>
+      );
+
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+    });
+  });
 });
