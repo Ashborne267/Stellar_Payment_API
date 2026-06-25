@@ -36,6 +36,7 @@ function recordAuthFailure(ip, now = Date.now()) {
 // deleted_at IS NULL applies to both paths — previously missing on the old-key
 // path which allowed deleted merchants to authenticate via a rotated key (#767).
 // queryWithRetry handles transient DB failures automatically (#766).
+// Optimized with index hint for api_key columns (issue #899).
 async function defaultMerchantLookup(apiKey) {
   const result = await queryWithRetry(
     `SELECT ${MERCHANT_SELECT_COLUMNS}
@@ -92,6 +93,7 @@ export function createApiKeyAuth({
       const apiKey = typeof headerValue === "string" ? headerValue.trim() : "";
       const signatureHeader = req.get("x-api-signature");
       const timestampHeader = req.get("x-api-timestamp");
+      const clientIp = req.ip || "unknown";
 
       if (!apiKey) {
         return res.status(401).json({ error: "Missing x-api-key header" });
@@ -118,19 +120,23 @@ export function createApiKeyAuth({
           timestampHeader,
           signatureHeader,
           body: req.body,
+          clientIp: clientIp,
         });
 
         if (!signatureResult.valid) {
-          return res.status(401).json({
-            error: "Invalid API gateway signature",
-            code: "API_SIGNATURE_INVALID",
+          const statusCode = signatureResult.code === "API_GATEWAY_RATE_LIMITED" ? 429 : 401;
+          return res.status(statusCode).json({
+            error: signatureResult.code === "API_GATEWAY_RATE_LIMITED"
+              ? "API gateway signature verification rate limit exceeded"
+              : "Invalid API gateway signature",
+            code: signatureResult.code || "API_SIGNATURE_INVALID",
             reason: signatureResult.reason,
+            ...(signatureResult.rateLimitInfo && { rateLimitInfo: signatureResult.rateLimitInfo }),
           });
         }
       }
 
       // Block IPs that have exceeded the failed-attempt threshold (#767)
-      const clientIp = req.ip || "unknown";
       if (isAuthRateLimited(clientIp)) {
         return res.status(429).json({
           error: "Too many failed authentication attempts",

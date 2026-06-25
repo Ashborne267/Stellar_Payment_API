@@ -74,6 +74,7 @@ class QueryRateLimiter {
 
   /**
    * Get or create a merchant-specific window.
+   * Includes cleanup of expired windows to prevent memory exhaustion (security audit #896).
    */
   _getMerchantWindow(merchantId) {
     if (!this.merchantWindows.has(merchantId)) {
@@ -92,7 +93,25 @@ class QueryRateLimiter {
       window.count = 0;
     }
 
+    // Periodic cleanup of stale windows to prevent memory exhaustion
+    if (this.merchantWindows.size > 10000) {
+      this._cleanupStaleWindows(now);
+    }
+
     return window;
+  }
+
+  /**
+   * Cleanup stale merchant windows to prevent memory exhaustion attacks.
+   * Removes windows that haven't been accessed within 2x the rate limit window.
+   */
+  _cleanupStaleWindows(now) {
+    const staleThreshold = this.windowMs * 2;
+    for (const [id, window] of this.merchantWindows.entries()) {
+      if (now - window.windowStart > staleThreshold) {
+        this.merchantWindows.delete(id);
+      }
+    }
   }
 
   /**
@@ -179,6 +198,7 @@ export function signQuery(text, values = []) {
 /**
  * Verify an HMAC signature for a query.
  * Uses constant-time comparison to prevent timing attacks.
+ * Enhanced with additional security checks (security audit #896).
  *
  * @param {string} text - SQL query text
  * @param {Array} values - Query parameter values
@@ -192,6 +212,12 @@ export function verifyQuerySignature(text, values, signature) {
   }
 
   if (!signature || typeof signature !== "string") {
+    return false;
+  }
+
+  // Additional security: validate signature format before processing
+  if (!/^[a-f0-9]{64}$/i.test(signature)) {
+    logger.warn({ signature: signature.substring(0, 8) }, "Invalid signature format detected");
     return false;
   }
 
@@ -210,6 +236,7 @@ export function verifyQuerySignature(text, values, signature) {
 
     return timingSafeEqual(expectedBuf, actualBuf);
   } catch {
+    logger.warn("Signature verification failed with exception");
     return false;
   }
 }

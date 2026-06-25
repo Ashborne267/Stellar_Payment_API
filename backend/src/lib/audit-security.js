@@ -167,6 +167,53 @@ export function consumeAuditLogRateLimit(
   };
 }
 
+/**
+ * Get comprehensive rate limit statistics for audit logging (issue #902).
+ * Useful for monitoring and debugging rate limit behavior.
+ */
+export function getAuditRateLimitStats() {
+  const now = Date.now();
+  const stats = {
+    totalKeys: auditRateLimitState.size,
+    activeWindows: 0,
+    expiredWindows: 0,
+    maxRequestsPerWindow: Number(process.env.AUDIT_LOG_RATE_LIMIT_MAX || DEFAULT_AUDIT_RATE_LIMIT_MAX),
+    windowMs: Number(process.env.AUDIT_LOG_RATE_LIMIT_WINDOW_MS || DEFAULT_AUDIT_RATE_LIMIT_WINDOW_MS),
+  };
+
+  for (const [key, state] of auditRateLimitState.entries()) {
+    if (now >= state.windowStart + stats.windowMs) {
+      stats.expiredWindows++;
+    } else {
+      stats.activeWindows++;
+    }
+  }
+
+  return stats;
+}
+
+/**
+ * Cleanup expired audit rate limit entries to prevent memory exhaustion (issue #902).
+ * Should be called periodically (e.g., via cron or on a schedule).
+ */
+export function cleanupExpiredAuditRateLimits() {
+  const now = Date.now();
+  const windowMs = Number(
+    process.env.AUDIT_LOG_RATE_LIMIT_WINDOW_MS || DEFAULT_AUDIT_RATE_LIMIT_WINDOW_MS,
+  );
+  const staleThreshold = windowMs * 2; // Remove entries older than 2x the window
+
+  let cleaned = 0;
+  for (const [key, state] of auditRateLimitState.entries()) {
+    if (now - state.windowStart > staleThreshold) {
+      auditRateLimitState.delete(key);
+      cleaned++;
+    }
+  }
+
+  return cleaned;
+}
+
 export function resetAuditRateLimitStateForTests() {
   auditRateLimitState.clear();
 }
