@@ -281,6 +281,30 @@ describe("MultisigApprovalModal Component", () => {
   });
 
   describe("Confirmation State", () => {
+    it("shows optimistic pending state on submit before finalising", async () => {
+      renderWithProvider();
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      await waitFor(() => {
+        expect(screen.getByText("50%")).toBeInTheDocument();
+      }, { timeout: 2000 });
+
+      fireEvent.click(signButtons[1]);
+
+      await waitFor(() => {
+        expect(screen.getByText("Submit Transaction")).toBeInTheDocument();
+      }, { timeout: 2000 });
+
+      fireEvent.click(screen.getByText("Submit Transaction"));
+
+      // Optimistic state appears immediately
+      expect(screen.getByText("Transaction Submitted")).toBeInTheDocument();
+      expect(screen.getByText("Awaiting network confirmation...")).toBeInTheDocument();
+      expect(screen.getByText("Confirming...")).toBeInTheDocument();
+    });
+
     it("shows confirmation after successful submission", async () => {
       renderWithProvider();
 

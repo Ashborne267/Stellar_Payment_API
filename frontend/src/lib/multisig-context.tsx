@@ -37,6 +37,7 @@ export interface MultisigContextType {
   transaction: MultisigTransaction | null;
   currentStep: MultisigStep;
   isLoading: boolean;
+  isPendingConfirmation: boolean;
   error: string | null;
   isMounted: boolean;
   isVisible: boolean;
@@ -71,6 +72,7 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
   const [transaction, setTransaction] = useState<MultisigTransaction | null>(null);
   const [currentStep, setCurrentStep] = useState<MultisigStep>("review");
   const [isLoading, setIsLoading] = useState(false);
+  const [isPendingConfirmation, setIsPendingConfirmation] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isMounted, setIsMounted] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
@@ -83,6 +85,7 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
     setTransaction(null);
     setCurrentStep("review");
     setIsLoading(false);
+    setIsPendingConfirmation(false);
     setError(null);
     setIsVisible(false);
   }, []);
@@ -188,10 +191,10 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
       return;
     }
 
+    const previousTransaction = { ...transaction, signers: [...transaction.signers] };
+
     try {
-      setIsLoading(true);
       clearError();
-      setCurrentStep("processing");
 
       // Verify enough signatures
       const signedWeight = transaction.signers.filter(s => s.hasSigned)
@@ -201,27 +204,37 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
         throw new Error("Not enough signatures to submit transaction");
       }
 
+      // Optimistic update: immediately show confirm step with a pending tx hash
+      const pendingTxHash = `tx_pending_${Date.now()}`;
+      setIsPendingConfirmation(true);
+      setCurrentStep("confirm");
+      setTransactionSafe({
+        ...transaction,
+        status: 'approved' as MultisigApprovalStatus,
+        submittedTxHash: pendingTxHash,
+      });
+
       // Simulate submission process
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Update transaction with submitted hash
-      const mockTxHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const updatedTransaction = {
+      // Finalize with real transaction hash
+      const realTxHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      setTransactionSafe({
         ...transaction,
         status: 'approved' as MultisigApprovalStatus,
-        submittedTxHash: mockTxHash
-      };
-
-      setTransactionSafe(updatedTransaction);
-      setCurrentStep("confirm");
+        submittedTxHash: realTxHash,
+      });
 
     } catch (err) {
+      // Revert optimistic update
+      setTransactionSafe(previousTransaction);
       const errorMessage = err instanceof Error ? err.message : "Failed to submit transaction";
       setError(errorMessage);
       setCurrentStep("error");
       console.error("Submission error:", err);
     } finally {
       setIsLoading(false);
+      setIsPendingConfirmation(false);
     }
   }, [transaction, clearError, setTransactionSafe]);
 
@@ -288,6 +301,7 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
     transaction,
     currentStep,
     isLoading,
+    isPendingConfirmation,
     error,
     isMounted,
     isVisible,
@@ -303,6 +317,7 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
     transaction,
     currentStep,
     isLoading,
+    isPendingConfirmation,
     error,
     isMounted,
     isVisible,
@@ -336,6 +351,7 @@ export function useMultisigState() {
     transaction, 
     currentStep, 
     isLoading, 
+    isPendingConfirmation,
     error, 
     isMounted, 
     isVisible,
@@ -352,6 +368,7 @@ export function useMultisigState() {
     transaction,
     currentStep,
     isLoading,
+    isPendingConfirmation,
     error,
     isMounted,
     isVisible,

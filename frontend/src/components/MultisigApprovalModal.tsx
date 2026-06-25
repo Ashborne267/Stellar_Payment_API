@@ -80,6 +80,7 @@ export default function MultisigApprovalModal({
     requiredSignatures,
     progress,
     isExpired,
+    isPendingConfirmation,
     timeRemaining,
   } = useMultisigState();
 
@@ -155,10 +156,10 @@ export default function MultisigApprovalModal({
   }, [isOpen]);
 
   const handleClose = useCallback(() => {
-    if (isLoading) return;
+    if (isLoading || isPendingConfirmation) return;
     resetModal();
     onClose();
-  }, [isLoading, resetModal, onClose]);
+  }, [isLoading, isPendingConfirmation, resetModal, onClose]);
 
   const handleSign = useCallback(async (signerId: string) => {
     try {
@@ -347,36 +348,72 @@ export default function MultisigApprovalModal({
 
   const ConfirmStep = () => (
     <div className="text-center space-y-6">
-      <div className="w-16 h-16 bg-mint/20 rounded-full flex items-center justify-center mx-auto">
-        <svg className="w-8 h-8 text-mint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-        </svg>
-      </div>
-      <div>
-        <h3 className="text-xl font-bold text-white">Transaction Approved</h3>
-        <p className="mt-2 text-sm text-slate-400">
-          Your multi-signature transaction has been successfully submitted
-        </p>
-      </div>
-      {transaction?.submittedTxHash && (
-        <div className="rounded-xl border border-mint/30 bg-mint/5 p-4">
-          <p className="text-xs font-medium uppercase tracking-wider text-mint mb-2">Transaction Hash</p>
-          <div className="flex items-center justify-center gap-2">
-            <code className="font-mono text-sm text-slate-200">
-              {transaction.submittedTxHash}
-            </code>
-            <CopyButton text={transaction.submittedTxHash} />
+      {isPendingConfirmation ? (
+        <>
+          <div className="relative mx-auto w-16 h-16" aria-hidden="true">
+            <div className="w-16 h-16 border-4 border-mint border-t-transparent rounded-full animate-spin" />
+            <div className="absolute inset-0 w-16 h-16 border-4 border-mint/20 rounded-full animate-ping" />
           </div>
-        </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">Transaction Submitted</h3>
+            <p className="mt-2 text-sm text-slate-400">
+              Awaiting network confirmation...
+            </p>
+          </div>
+          {transaction?.submittedTxHash && (
+            <div className="rounded-xl border border-mint/30 bg-mint/5 p-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-mint mb-2">
+                Transaction Hash (pending)
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                <code className="font-mono text-sm text-slate-200">
+                  {transaction.submittedTxHash}
+                </code>
+                <CopyButton text={transaction.submittedTxHash} />
+              </div>
+            </div>
+          )}
+          <motion.button
+            disabled
+            className="px-6 py-2 bg-mint/50 text-black/50 font-semibold rounded-xl cursor-not-allowed"
+          >
+            Confirming...
+          </motion.button>
+        </>
+      ) : (
+        <>
+          <div className="w-16 h-16 bg-mint/20 rounded-full flex items-center justify-center mx-auto">
+            <svg className="w-8 h-8 text-mint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <div>
+            <h3 className="text-xl font-bold text-white">Transaction Approved</h3>
+            <p className="mt-2 text-sm text-slate-400">
+              Your multi-signature transaction has been successfully submitted
+            </p>
+          </div>
+          {transaction?.submittedTxHash && (
+            <div className="rounded-xl border border-mint/30 bg-mint/5 p-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-mint mb-2">Transaction Hash</p>
+              <div className="flex items-center justify-center gap-2">
+                <code className="font-mono text-sm text-slate-200">
+                  {transaction.submittedTxHash}
+                </code>
+                <CopyButton text={transaction.submittedTxHash} />
+              </div>
+            </div>
+          )}
+          <motion.button
+            onClick={handleClose}
+            whileHover={!prefersReducedMotion ? { scale: 1.02 } : undefined}
+            whileTap={!prefersReducedMotion ? { scale: 0.98 } : undefined}
+            className="px-6 py-2 bg-mint text-black font-semibold rounded-xl hover:bg-glow transition-colors"
+          >
+            Close
+          </motion.button>
+        </>
       )}
-      <motion.button
-        onClick={handleClose}
-        whileHover={!prefersReducedMotion ? { scale: 1.02 } : undefined}
-        whileTap={!prefersReducedMotion ? { scale: 0.98 } : undefined}
-        className="px-6 py-2 bg-mint text-black font-semibold rounded-xl hover:bg-glow transition-colors"
-      >
-        Close
-      </motion.button>
     </div>
   );
 
