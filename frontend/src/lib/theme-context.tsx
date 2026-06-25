@@ -43,6 +43,58 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+// --- Reducer ---
+
+interface ThemeState {
+  theme: ThemeMode;
+  resolvedTheme: ResolvedTheme | undefined;
+  isMounted: boolean;
+  isLoading: boolean;
+  error: string | null;
+}
+
+type ThemeAction =
+  | { type: "MOUNT"; theme: ThemeMode; resolvedTheme: ResolvedTheme }
+  | { type: "SET_THEME"; theme: ThemeMode; resolvedTheme: ResolvedTheme }
+  | { type: "SET_RESOLVED"; resolvedTheme: ResolvedTheme }
+  | { type: "SET_ERROR"; error: string; theme: ThemeMode; resolvedTheme: ResolvedTheme | undefined }
+  | { type: "CLEAR_ERROR" };
+
+function themeReducer(state: ThemeState, action: ThemeAction): ThemeState {
+  switch (action.type) {
+    case "MOUNT":
+      return {
+        ...state,
+        isMounted: true,
+        isLoading: false,
+        theme: action.theme,
+        resolvedTheme: action.resolvedTheme,
+      };
+    case "SET_THEME":
+      return {
+        ...state,
+        theme: action.theme,
+        resolvedTheme: action.resolvedTheme,
+        error: null,
+      };
+    case "SET_RESOLVED":
+      return { ...state, resolvedTheme: action.resolvedTheme };
+    case "SET_ERROR":
+      return {
+        ...state,
+        error: action.error,
+        theme: action.theme,
+        resolvedTheme: action.resolvedTheme,
+      };
+    case "CLEAR_ERROR":
+      return { ...state, error: null };
+    default:
+      return state;
+  }
+}
+
+// --- Provider ---
+
 interface ThemeProviderProps {
   readonly children: ReactNode;
   readonly defaultTheme?: ThemeMode;
@@ -58,11 +110,30 @@ export function ThemeProvider({
   enableSystem = true,
   forcedTheme,
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<ThemeMode | undefined>(defaultTheme);
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme | undefined>(undefined);
-  const [isMounted, setIsMounted] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(themeReducer, {
+    theme: defaultTheme,
+    resolvedTheme: undefined,
+    isMounted: false,
+    isLoading: true,
+    error: null,
+  });
+
+  // Ref so media query listener always reads the latest theme without stale closure
+  const themeRef = useRef<ThemeMode>(defaultTheme);
+  themeRef.current = state.theme;
+
+  const resolveTheme = useCallback(
+    (themeMode: ThemeMode): ResolvedTheme => {
+      if (forcedTheme) return forcedTheme;
+      if (themeMode !== "system") return themeMode;
+      const prefersDark =
+        typeof globalThis !== "undefined" && globalThis.window
+          ? globalThis.window.matchMedia("(prefers-color-scheme: dark)").matches
+          : false;
+      return prefersDark ? "dark" : "light";
+    },
+    [forcedTheme]
+  );
 
   const themeRef = useRef(theme);
   const resolvedRef = useRef(resolvedTheme);
@@ -120,6 +191,7 @@ export function ThemeProvider({
     }
   }, [forcedTheme]);
 
+  // Mount effect — runs once to read stored preference and attach system listener
   useEffect(() => {
     setIsMounted(true);
 
@@ -198,9 +270,5 @@ export function useThemeState() {
 
 export function useThemeActions() {
   const { setTheme, toggleTheme, clearError } = useTheme();
-  return {
-    setTheme,
-    toggleTheme,
-    clearError,
-  };
+  return { setTheme, toggleTheme, clearError };
 }
