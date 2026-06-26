@@ -281,6 +281,30 @@ describe("MultisigApprovalModal Component", () => {
   });
 
   describe("Confirmation State", () => {
+    it("shows optimistic pending state on submit before finalising", async () => {
+      renderWithProvider();
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      await waitFor(() => {
+        expect(screen.getByText("50%")).toBeInTheDocument();
+      }, { timeout: 2000 });
+
+      fireEvent.click(signButtons[1]);
+
+      await waitFor(() => {
+        expect(screen.getByText("Submit Transaction")).toBeInTheDocument();
+      }, { timeout: 2000 });
+
+      fireEvent.click(screen.getByText("Submit Transaction"));
+
+      // Optimistic state appears immediately
+      expect(screen.getByText("Transaction Submitted")).toBeInTheDocument();
+      expect(screen.getByText("Awaiting network confirmation...")).toBeInTheDocument();
+      expect(screen.getByText("Confirming...")).toBeInTheDocument();
+    });
+
     it("shows confirmation after successful submission", async () => {
       renderWithProvider();
 
@@ -454,6 +478,64 @@ describe("MultisigApprovalModal Component", () => {
         expect(decorativeElement).toBeInTheDocument();
       });
     });
+
+    it("sets aria-busy on dialog during loading", async () => {
+      renderWithProvider();
+
+      const modal = screen.getByRole("dialog");
+      expect(modal).toHaveAttribute("aria-busy", "false");
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      expect(modal).toHaveAttribute("aria-busy", "true");
+
+      await waitFor(() => {
+        expect(modal).toHaveAttribute("aria-busy", "false");
+      }, { timeout: 2000 });
+    });
+
+    it("has screen reader announcement region for step transitions", () => {
+      renderWithProvider();
+
+      const announcementRegion = document.querySelector('[aria-live="assertive"][aria-atomic="true"]');
+      expect(announcementRegion).toBeInTheDocument();
+      expect(announcementRegion).toHaveClass("sr-only");
+    });
+
+    it("traps focus within the modal", async () => {
+      renderWithProvider();
+
+      const modal = screen.getByRole("dialog");
+      const closeButton = screen.getByLabelText("Close modal");
+      const signButtons = screen.getAllByText("Sign");
+      const firstSignButton = signButtons[0];
+
+      closeButton.focus();
+
+      // Tab forward from close button should move to first sign button
+      fireEvent.keyDown(document, { key: "Tab" });
+      // Wait for React to process
+      await waitFor(() => {
+        expect(document.activeElement).toBe(firstSignButton);
+      });
+    });
+
+    it("traps focus in reverse direction with Shift+Tab", () => {
+      renderWithProvider();
+
+      const modal = screen.getByRole("dialog");
+      const closeButton = screen.getByLabelText("Close modal");
+      const signButtons = screen.getAllByText("Sign");
+      const firstSignButton = signButtons[0];
+
+      firstSignButton.focus();
+
+      // Shift+Tab from first sign button should wrap to close button
+      fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+
+      expect(document.activeElement).toBe(closeButton);
+    });
   });
 
   describe("Transaction Expiry", () => {
@@ -518,6 +600,141 @@ describe("MultisigApprovalModal Component", () => {
 
       const copyButtons = screen.getAllByLabelText(/copy/i);
       expect(copyButtons.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("Edge Cases", () => {
+    it("handles empty signers list gracefully", () => {
+      const noSignersTransaction = {
+        ...mockTransaction,
+        signers: [],
+      };
+      renderWithProvider({ transaction: noSignersTransaction });
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+      expect(screen.getByText(/Transaction must have at least one signer/i)).toBeInTheDocument();
+    });
+
+    it("handles single signer correctly", () => {
+      const singleSignerTransaction = {
+        ...mockTransaction,
+        signers: [
+          { id: "signer1", publicKey: "G123...", name: "Alice", weight: 1, hasSigned: false },
+        ],
+        minSignatures: 1,
+      };
+      renderWithProvider({ transaction: singleSignerTransaction });
+
+      const signButtons = screen.getAllByText("Sign");
+      expect(signButtons).toHaveLength(1);
+      expect(screen.getByText("Signatures (0/1)")).toBeInTheDocument();
+    });
+
+    it("shows all signers as signed when pre-signed", () => {
+      const allSignedTransaction = {
+        ...mockTransaction,
+        signers: [
+          { id: "signer1", publicKey: "G123...", name: "Alice", weight: 1, hasSigned: true },
+          { id: "signer2", publicKey: "G456...", name: "Bob", weight: 1, hasSigned: true },
+        ],
+      };
+      renderWithProvider({ transaction: allSignedTransaction });
+
+      const signedButtons = screen.getAllByText("Signed");
+      expect(signedButtons).toHaveLength(2);
+      expect(screen.getByText("Submit Transaction")).toBeInTheDocument();
+    });
+  });
+
+  describe("Component Cleanup", () => {
+    it("restores body overflow on unmount", () => {
+      const { unmount } = renderWithProvider({ isOpen: true });
+      expect(document.body.style.overflow).toBe("hidden");
+      unmount();
+      expect(document.body.style.overflow).toBe("");
+    });
+  });
+
+  describe("Loading Interaction Guards", () => {
+    it("disables close button during loading", async () => {
+      renderWithProvider();
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      const closeButton = screen.getByLabelText("Close modal");
+      expect(closeButton).toBeDisabled();
+
+      await waitFor(() => {
+        expect(closeButton).not.toBeDisabled();
+      }, { timeout: 2000 });
+    });
+
+    it("prevents backdrop close during loading", async () => {
+      const mockOnClose = jest.fn();
+      renderWithProvider({ onClose: mockOnClose });
+
+      const signButtons = screen.getAllByText("Sign");
+      fireEvent.click(signButtons[0]);
+
+      const backdrop = screen.getByText("Multi-Signature Approval")
+        .closest('[role="dialog"]')?.previousSibling as HTMLElement;
+      if (backdrop) {
+        fireEvent.click(backdrop);
+      }
+
+      expect(mockOnClose).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Render Boundary States", () => {
+    it("renders without crashing when transaction is null", () => {
+      renderWithProvider({ transaction: null });
+
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+      expect(screen.getByText("Review Transaction")).toBeInTheDocument();
+      expect(screen.queryByText("100 USDC")).not.toBeInTheDocument();
+    });
+
+    it("reopens correctly after being closed", () => {
+      const mockOnClose = jest.fn();
+      const { rerender } = render(
+        <MultisigProvider networkPassphrase="Test Network">
+          <MultisigApprovalModal
+            isOpen={true}
+            onClose={mockOnClose}
+            networkPassphrase="Test Network"
+            transaction={mockTransaction}
+          />
+        </MultisigProvider>
+      );
+
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
+
+      rerender(
+        <MultisigProvider networkPassphrase="Test Network">
+          <MultisigApprovalModal
+            isOpen={false}
+            onClose={mockOnClose}
+            networkPassphrase="Test Network"
+            transaction={mockTransaction}
+          />
+        </MultisigProvider>
+      );
+
+      expect(screen.queryByText("Multi-Signature Approval")).not.toBeInTheDocument();
+
+      rerender(
+        <MultisigProvider networkPassphrase="Test Network">
+          <MultisigApprovalModal
+            isOpen={true}
+            onClose={mockOnClose}
+            networkPassphrase="Test Network"
+            transaction={mockTransaction}
+          />
+        </MultisigProvider>
+      );
+
+      expect(screen.getByText("Multi-Signature Approval")).toBeInTheDocument();
     });
   });
 });

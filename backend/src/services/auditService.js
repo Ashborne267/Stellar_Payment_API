@@ -1,5 +1,6 @@
-import { isRetryablePoolError } from "../lib/db.js";
-import { optimizedQuery, optimizedWrite } from "../lib/db-pooler-optimized.js";
+import { AuditCircuitBreaker, CircuitState } from "../lib/audit-circuit-breaker.js";
+import { replayFallbackLogs } from "../lib/audit-replay.js";
+import { pool, isRetryablePoolError } from "../lib/db.js";
 import {
   consumeAuditLogRateLimit,
   createAuditLogRateLimitKey,
@@ -8,6 +9,7 @@ import {
   sanitizeAuditValue,
   signAuditPayload,
   validateAuditAction,
+  verifyRowIntegrity,
 } from "../lib/audit-security.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -26,41 +28,31 @@ const AUDIT_DB_RETRY_DELAY_MS = Number.parseInt(process.env.AUDIT_DB_RETRY_DELAY
 const SVC_CIRCUIT_FAILURE_THRESHOLD = Number.parseInt(process.env.AUDIT_CIRCUIT_FAILURE_THRESHOLD || "5", 10);
 const SVC_CIRCUIT_RESET_MS = Number.parseInt(process.env.AUDIT_CIRCUIT_RESET_MS || "60000", 10);
 
-const _svcCircuit = {
-  open: false,
-  failures: 0,
-  openedAt: 0,
-};
+const svcCircuitBreaker = new AuditCircuitBreaker({
+  failureThreshold: SVC_CIRCUIT_FAILURE_THRESHOLD,
+  resetTimeoutMs: SVC_CIRCUIT_RESET_MS,
+  label: "audit-service",
+  onClose: () => {
+    replayFallbackLogs(AUDIT_FALLBACK_LOG_PATH).catch((err) => {
+      console.error("[Audit Replay] Fallback log replay failed:", err.message);
+    });
+  },
+});
 
 export function _resetSvcCircuitForTests() {
-  _svcCircuit.open = false;
-  _svcCircuit.failures = 0;
-  _svcCircuit.openedAt = 0;
+  svcCircuitBreaker.reset();
 }
 
 function isSvcCircuitOpen(now = Date.now()) {
-  if (!_svcCircuit.open) return false;
-  if (now - _svcCircuit.openedAt >= SVC_CIRCUIT_RESET_MS) {
-    _svcCircuit.open = false;
-    return false;
-  }
-  return true;
+  return svcCircuitBreaker.isOpen(now);
 }
 
 function recordSvcSuccess() {
-  _svcCircuit.failures = 0;
-  _svcCircuit.open = false;
+  svcCircuitBreaker.recordSuccess();
 }
 
 function recordSvcFailure(now = Date.now()) {
-  _svcCircuit.failures += 1;
-  if (_svcCircuit.failures >= SVC_CIRCUIT_FAILURE_THRESHOLD) {
-    _svcCircuit.open = true;
-    _svcCircuit.openedAt = now;
-    console.warn(
-      `[auditService] Circuit breaker opened after ${_svcCircuit.failures} consecutive failures. DB writes suspended for ${SVC_CIRCUIT_RESET_MS}ms.`,
-    );
-  }
+  svcCircuitBreaker.recordFailure(now);
 }
 
 function sleep(ms) {
@@ -144,31 +136,35 @@ export const auditService = {
 
     const offset = (p - 1) * l;
 
-    const [countResult, logsResult] = await Promise.all([
-      optimizedQuery(
-        `SELECT COUNT(*)::integer AS total_count FROM audit_logs WHERE merchant_id = $1`,
-        [merchantId],
-        {
-          label: "count_audit_logs",
-          merchantId,
-        }
-      ),
-      optimizedQuery(
-        `SELECT id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp
-         FROM audit_logs
-         WHERE merchant_id = $1
-         ORDER BY timestamp DESC
-         LIMIT $2 OFFSET $3`,
-        [merchantId, l, offset],
-        {
-          label: "get_audit_logs",
-          merchantId,
-        }
-      )
-    ]);
+    // Single query: window function returns the full-table count alongside
+    // each row, eliminating the separate COUNT(*) round-trip (issue #770).
+    const result = await pool.query(
+      `SELECT id, merchant_id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp, payload_hash, signature,
+              COUNT(*) OVER() AS total_count
+       FROM audit_logs
+       WHERE merchant_id = $1
+       ORDER BY timestamp DESC
+       LIMIT $2 OFFSET $3`,
+      [merchantId, l, offset],
+    );
 
-    const totalCount = countResult.rows.length > 0 ? parseInt(countResult.rows[0].total_count, 10) : 0;
-    const logs = logsResult.rows;
+    const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
+    
+    // Verify cryptographic integrity of each row before returning
+    const logs = result.rows.map(({ total_count: _tc, ...row }) => {
+      const integrity = verifyRowIntegrity(row);
+      return {
+        id: row.id,
+        action: row.action,
+        field_changed: row.field_changed,
+        old_value: row.old_value,
+        new_value: row.new_value,
+        ip_address: row.ip_address,
+        user_agent: row.user_agent,
+        timestamp: row.timestamp,
+        integrity_status: integrity.status,
+      };
+    });
 
     return {
       logs,

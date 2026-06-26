@@ -229,12 +229,6 @@ export function resolveAsset(assetCode, assetIssuer) {
     throw new Error("Asset code is required");
   }
 
-  const normalizedCode = assetCode.toUpperCase();
-  if (!isValidAssetCode(normalizedCode)) {
-    throw new Error("Asset code must be 1-12 uppercase alphanumeric characters");
-  }
-
-  if (normalizedCode === "XLM") {
   if (!ASSET_CODE_PATTERN.test(normalizedAssetCode)) {
     throw new Error("Asset code must be 1-12 alphanumeric characters");
   }
@@ -247,13 +241,7 @@ export function resolveAsset(assetCode, assetIssuer) {
     throw new Error("Asset issuer is required for non-native assets");
   }
 
-  if (!isValidStellarAccountId(assetIssuer)) {
-    throw new Error("Asset issuer must be a valid Stellar public key");
-  }
-
-  return new StellarSdk.Asset(normalizedCode, assetIssuer);
   const normalizedAssetIssuer = String(assetIssuer).trim();
-
   if (!isValidStellarPublicKey(normalizedAssetIssuer)) {
     throw new Error("Asset issuer must be a valid Stellar public key");
   }
@@ -713,6 +701,7 @@ export async function getStellarConfig() {
  * @property {boolean} isMultiSig     - Whether the source account uses multi-sig.
  * @property {number}  signatureCount - Number of signatures present in the envelope.
  * @property {boolean} thresholdMet   - Whether the signing weight meets the medium threshold.
+ * @property {boolean} [isFeeBump]    - Whether the envelope was a fee-bump (the inner transaction was verified).
  */
 
 /**
@@ -816,26 +805,42 @@ export async function verifyTransactionSignature(txHash, options = {}) {
     }
   }
 
-  // ── Step 2: Deserialise XDR envelope ─────────────────────────────────────
+  // ── Step 2: Deserialise XDR envelope (supports fee-bump transactions) ─────
   let transaction;
+  let isFeeBump = false;
   try {
     transaction = new StellarSdk.Transaction(tx.envelope_xdr, passphrase);
-  } catch (err) {
-    logger.error({
-      txHash,
-      xdrLength: tx.envelope_xdr?.length,
-      errorName: err.name,
-      errorMessage: err.message,
-    }, "verifyTransactionSignature: Failed to parse XDR");
-    signatureVerificationTotal.inc({ result: "error" });
-    signatureVerificationDuration.observe({ result: "error" }, (Date.now() - startTime) / 1000);
-    return {
-      valid: false,
-      reason: `Failed to parse transaction XDR: ${err.message}`,
-      isMultiSig: false,
-      signatureCount: 0,
-      thresholdMet: false,
-    };
+  } catch (parseErr) {
+    // The Transaction constructor cannot parse a fee-bump envelope. Unwrap it
+    // and verify the INNER transaction's signatures: the fee-bump's own
+    // signature only authorises the fee payer, not the payment, so verifying
+    // the wrapper alone would let an attacker fee-bump someone else's unsigned
+    // transaction. Verifying the inner transaction closes that gap.
+    try {
+      const envelope = StellarSdk.TransactionBuilder.fromXDR(tx.envelope_xdr, passphrase);
+      if (envelope instanceof StellarSdk.FeeBumpTransaction) {
+        transaction = envelope.innerTransaction;
+        isFeeBump = true;
+      } else {
+        throw parseErr;
+      }
+    } catch (err) {
+      logger.error({
+        txHash,
+        xdrLength: tx.envelope_xdr?.length,
+        errorName: err.name,
+        errorMessage: err.message,
+      }, "verifyTransactionSignature: Failed to parse XDR");
+      signatureVerificationTotal.inc({ result: "error" });
+      signatureVerificationDuration.observe({ result: "error" }, (Date.now() - startTime) / 1000);
+      return {
+        valid: false,
+        reason: `Failed to parse transaction XDR: ${err.message}`,
+        isMultiSig: false,
+        signatureCount: 0,
+        thresholdMet: false,
+      };
+    }
   }
 
   const signatures = transaction.signatures;
@@ -985,5 +990,6 @@ export async function verifyTransactionSignature(txHash, options = {}) {
     isMultiSig,
     signatureCount: signatures.length,
     thresholdMet: true,
+    isFeeBump,
   };
 }

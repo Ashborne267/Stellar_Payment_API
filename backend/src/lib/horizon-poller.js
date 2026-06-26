@@ -52,7 +52,12 @@ import {
   ledgerMonitorCycleDuration,
   ledgerMonitorPaymentsChecked,
   ledgerMonitorCircuitBreakerTrips,
+  rateLimitRequestsTotal,
+  rateLimitExceededTotal,
 } from "./metrics.js";
+
+/** Prometheus label set identifying the Ledger Monitor's Horizon rate limiter. */
+const RATE_LIMIT_LABELS = { endpoint: "ledger_monitor", type: "horizon" };
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
 
@@ -128,11 +133,17 @@ export function getPollerHealth() {
     _circuitBreakerOpenAt > 0 &&
     Date.now() - _circuitBreakerOpenAt < CIRCUIT_BREAKER_RESET_MS;
 
+  const rateLimitedRequests =
+    typeof _rateLimiter.stats === "function"
+      ? _rateLimiter.stats().rateLimitedRequests
+      : 0;
+
   return {
     consecutiveFailures: _consecutiveFailures,
     circuitBreakerOpen,
     backoffIndex: _backoffIndex,
     horizonRequestsPerSecond: _rateLimiter.maxPerSecond,
+    rateLimitedRequests,
   };
 }
 
@@ -164,6 +175,9 @@ export function createLedgerMonitorRateLimiter({
   const safeBurst = Math.max(1, Number(burst) || safeMax);
   let tokens = safeBurst;
   let lastRefillAt = now();
+  // Number of requests that were throttled (had to wait for a token). Surfaced
+  // via stats() and getPollerHealth() for observability.
+  let rateLimitedRequests = 0;
 
   function refill() {
     const current = now();
@@ -175,24 +189,32 @@ export function createLedgerMonitorRateLimiter({
   return {
     maxPerSecond: safeMax,
     async waitForSlot() {
+      rateLimitRequestsTotal.inc(RATE_LIMIT_LABELS);
       refill();
       if (tokens >= 1) {
         tokens -= 1;
         return;
       }
 
+      // No token available — this request is being throttled.
+      rateLimitExceededTotal.inc(RATE_LIMIT_LABELS);
+      rateLimitedRequests += 1;
       const delayMs = Math.ceil(((1 - tokens) / safeMax) * 1000);
       logger.warn(
-        { delayMs, maxPerSecond: safeMax },
+        { delayMs, maxPerSecond: safeMax, rateLimitedRequests },
         "Horizon poller: rate limit reached — delaying Horizon request",
       );
       await sleepFn(delayMs);
       refill();
       tokens = Math.max(0, tokens - 1);
     },
+    stats() {
+      return { rateLimitedRequests, maxPerSecond: safeMax };
+    },
     reset() {
       tokens = safeBurst;
       lastRefillAt = now();
+      rateLimitedRequests = 0;
     },
   };
 }
@@ -280,9 +302,11 @@ async function pollPendingPayments() {
       groups.get(key).push(p);
     }
 
-    // Process each group sequentially, different groups in parallel
-    const merchantConfigCache = new Map();
-    await Promise.allSettled(
+    // Pre-load every merchant notification config for this batch in a single
+    // query, replacing the previous N+1 pattern (one merchants lookup per
+    // confirmed payment). Seeds the per-cycle cache consumed by checkPayment.
+    const merchantConfigCache = await preloadMerchantConfigs(pending);
+    const results = await Promise.allSettled(
       Array.from(groups.values()).map(async (group) => {
         for (const p of group) {
           await checkPayment(p, { merchantConfigCache });
@@ -290,12 +314,18 @@ async function pollPendingPayments() {
       })
     );
 
-    // Record metrics for payment check results
-    results.forEach((result) => {
-      if (result.status === 'rejected') {
-        logger.warn({ err: result.reason }, "Horizon poller: payment group processing failed");
+    // Record metrics for payment check results. `checkPayment` isolates its own
+    // errors, so a rejected group here is unexpected — surface it instead of
+    // letting it disappear (the previous code referenced an undefined
+    // `results`, throwing a ReferenceError that aborted the cycle every time).
+    for (const result of results) {
+      if (result.status === "rejected") {
+        logger.warn(
+          { err: result.reason },
+          "Horizon poller: payment group processing failed",
+        );
       }
-    });
+    }
 
   } catch (err) {
     logger.warn({ err }, "Horizon poller: unexpected error in poll cycle");
@@ -686,6 +716,7 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
       txHash,
       isMultiSig: sigResult.isMultiSig,
       signatureCount: sigResult.signatureCount,
+      isFeeBump: sigResult.isFeeBump ?? false,
     },
     "Horizon poller: signature verification passed",
   );
@@ -746,6 +777,56 @@ async function safeInvalidatePaymentCache(paymentId) {
       "Horizon poller: cache invalidation failed — continuing notifications",
     );
   }
+}
+
+/**
+ * Pre-load merchant notification configs for an entire pending batch in one
+ * `IN (...)` query, seeding the per-cycle cache. This collapses the previous
+ * N+1 access pattern (one `merchants` lookup per confirmed payment) into a
+ * single round-trip and removes the cross-group race on first lookup.
+ *
+ * Fully defensive: any failure returns an empty cache, so callers transparently
+ * fall back to per-payment lookups via {@link loadMerchantNotificationConfig}.
+ *
+ * @param {Array<{ merchant_id?: string }>} payments
+ * @returns {Promise<Map<string, object|null>>}
+ */
+async function preloadMerchantConfigs(payments) {
+  const cache = new Map();
+  try {
+    const merchantIds = [
+      ...new Set((payments ?? []).map((p) => p.merchant_id).filter(Boolean)),
+    ];
+    if (merchantIds.length === 0) return cache;
+
+    const { data, error } = await supabase
+      .from("merchants")
+      .select(`id, ${MERCHANT_NOTIFICATION_FIELDS}`)
+      .in("id", merchantIds);
+
+    if (error) {
+      logger.warn(
+        { err: error, merchantCount: merchantIds.length },
+        "Horizon poller: batch merchant preload failed — falling back to per-payment lookups",
+      );
+      return cache;
+    }
+
+    for (const merchant of data ?? []) {
+      cache.set(merchant.id, merchant);
+    }
+    // Record cache misses as null so confirmation never re-queries them.
+    for (const id of merchantIds) {
+      if (!cache.has(id)) cache.set(id, null);
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Horizon poller: batch merchant preload errored — falling back to per-payment lookups",
+    );
+    return new Map();
+  }
+  return cache;
 }
 
 async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
