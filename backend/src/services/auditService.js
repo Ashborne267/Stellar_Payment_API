@@ -80,7 +80,7 @@ async function insertAuditLog({ payload, payloadHash, signature }) {
 
   for (let attempt = 0; attempt <= AUDIT_DB_RETRY_ATTEMPTS; attempt += 1) {
     try {
-      await pool.query(
+      await optimizedWrite(
         `INSERT INTO audit_logs (merchant_id, action, field_changed, old_value, new_value, ip_address, user_agent, payload_hash, signature)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
@@ -94,6 +94,10 @@ async function insertAuditLog({ payload, payloadHash, signature }) {
           payloadHash,
           signature,
         ],
+        {
+          label: "insert_audit_log",
+          merchantId: payload.merchant_id,
+        }
       );
       recordSvcSuccess();
       return { success: true };
@@ -118,11 +122,9 @@ export const auditService = {
   /**
    * Retrieve paginated audit logs for a merchant.
    *
-   * Uses a single SQL query with a COUNT(*) OVER() window function so that
-   * the total row count and the page data are fetched in one round-trip to
-   * the database instead of two (issue #770).  The composite index on
-   * (merchant_id, timestamp) created in migration 20260425000000 is used by
-   * the ORDER BY clause to avoid a sequential scan on large tables.
+   * Splits paginated queries into parallel count and row retrieval queries (issue #770)
+   * executed via optimizedQuery to allow cacheability and avoid full table scan
+   * materialization in Postgres.
    */
   async getAuditLogs(merchantId, page = 1, limit = 50) {
     let p = parseInt(page, 10) || 1;
