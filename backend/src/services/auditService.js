@@ -7,6 +7,7 @@ import {
   sanitizeAuditValue,
   signAuditPayload,
   validateAuditAction,
+  verifyRowIntegrity,
 } from "../lib/audit-security.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -144,7 +145,7 @@ export const auditService = {
     // Single query: window function returns the full-table count alongside
     // each row, eliminating the separate COUNT(*) round-trip (issue #770).
     const result = await pool.query(
-      `SELECT id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp,
+      `SELECT id, merchant_id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp, payload_hash, signature,
               COUNT(*) OVER() AS total_count
        FROM audit_logs
        WHERE merchant_id = $1
@@ -154,8 +155,22 @@ export const auditService = {
     );
 
     const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
-    // Strip the synthetic total_count column from each returned row
-    const logs = result.rows.map(({ total_count: _tc, ...row }) => row);
+    
+    // Verify cryptographic integrity of each row before returning
+    const logs = result.rows.map(({ total_count: _tc, ...row }) => {
+      const integrity = verifyRowIntegrity(row);
+      return {
+        id: row.id,
+        action: row.action,
+        field_changed: row.field_changed,
+        old_value: row.old_value,
+        new_value: row.new_value,
+        ip_address: row.ip_address,
+        user_agent: row.user_agent,
+        timestamp: row.timestamp,
+        integrity_status: integrity.status,
+      };
+    });
 
     return {
       logs,
