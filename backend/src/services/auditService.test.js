@@ -196,4 +196,82 @@ describe("auditService", () => {
 
     appendFileSyncSpy.mockRestore();
   });
+
+  it("computes and includes integrity_status on getAuditLogs", async () => {
+    const { hashAuditPayload, signAuditPayload } = await import("../lib/audit-security.js");
+
+    const payload1 = {
+      merchant_id: "m-1",
+      action: "login",
+      status: "success",
+      ip_address: "1.2.3.4",
+      user_agent: "ua",
+      event_type: "login_attempt"
+    };
+
+    const hash1 = hashAuditPayload(payload1);
+    const sig1 = signAuditPayload(payload1, "test-secret");
+
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "log-1",
+          merchant_id: "m-1",
+          action: "login",
+          field_changed: null,
+          old_value: null,
+          new_value: null,
+          ip_address: "1.2.3.4",
+          user_agent: "ua",
+          timestamp: new Date(),
+          status: "success",
+          payload_hash: hash1,
+          signature: sig1,
+          total_count: "3"
+        },
+        {
+          id: "log-2",
+          merchant_id: "m-1",
+          action: "login",
+          field_changed: null,
+          old_value: null,
+          new_value: null,
+          ip_address: "1.2.3.4",
+          user_agent: "ua",
+          timestamp: new Date(),
+          status: "success",
+          payload_hash: hash1,
+          signature: null,
+          total_count: "3"
+        },
+        {
+          id: "log-3",
+          merchant_id: "m-1",
+          action: "login",
+          field_changed: null,
+          old_value: null,
+          new_value: null,
+          ip_address: "1.2.3.4",
+          user_agent: "ua",
+          timestamp: new Date(),
+          status: "success",
+          payload_hash: "wrong-hash",
+          signature: null,
+          total_count: "3"
+        }
+      ]
+    });
+
+    const originalSecret = process.env.AUDIT_LOG_SIGNING_SECRET;
+    process.env.AUDIT_LOG_SIGNING_SECRET = "test-secret";
+
+    try {
+      const result = await auditService.getAuditLogs("m-1", 1, 10);
+      expect(result.logs[0].integrity_status).toBe("verified");
+      expect(result.logs[1].integrity_status).toBe("unsigned_verified");
+      expect(result.logs[2].integrity_status).toBe("failed");
+    } finally {
+      process.env.AUDIT_LOG_SIGNING_SECRET = originalSecret;
+    }
+  });
 });
