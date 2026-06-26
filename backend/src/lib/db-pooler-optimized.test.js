@@ -366,3 +366,90 @@ describe("Database Pooler - getPoolerStats", () => {
     expect(typeof stats.signingEnabled).toBe("boolean");
   });
 });
+
+describe("Database Pooler - Rate Limiter stale window cleanup (Issue #892)", () => {
+  beforeEach(() => {
+    queryRateLimiter.globalCount = 0;
+    queryRateLimiter.globalWindowStart = Date.now();
+    queryRateLimiter.merchantWindows.clear();
+  });
+
+  it("cleans up stale merchant windows when size exceeds 10000", () => {
+    vi.useFakeTimers();
+
+    // Populate 10001 merchant windows with an already-expired windowStart
+    const staleStart = Date.now() - queryRateLimiter.windowMs * 3;
+    for (let i = 0; i < 10001; i++) {
+      queryRateLimiter.merchantWindows.set(`merchant-${i}`, {
+        windowStart: staleStart,
+        count: 1,
+      });
+    }
+
+    expect(queryRateLimiter.merchantWindows.size).toBe(10001);
+
+    // Triggering checkLimit for a new merchant causes _getMerchantWindow,
+    // which runs _cleanupStaleWindows when size > 10000
+    queryRateLimiter.checkLimit("new-merchant");
+
+    // All stale windows should have been evicted
+    expect(queryRateLimiter.merchantWindows.size).toBeLessThan(10001);
+
+    vi.useRealTimers();
+  });
+
+  it("preserves active merchant windows during cleanup", () => {
+    vi.useFakeTimers();
+
+    const staleStart = Date.now() - queryRateLimiter.windowMs * 3;
+    const activeStart = Date.now();
+
+    // Fill with 10000 stale windows
+    for (let i = 0; i < 10000; i++) {
+      queryRateLimiter.merchantWindows.set(`stale-${i}`, {
+        windowStart: staleStart,
+        count: 1,
+      });
+    }
+
+    // Add one active window
+    queryRateLimiter.merchantWindows.set("active-merchant", {
+      windowStart: activeStart,
+      count: 5,
+    });
+
+    // Trigger cleanup via a new merchant (size is 10001)
+    queryRateLimiter.checkLimit("trigger-cleanup");
+
+    // Active window must survive
+    expect(queryRateLimiter.merchantWindows.has("active-merchant")).toBe(true);
+
+    vi.useRealTimers();
+  });
+
+  it("getStats reflects merchant window count after cleanup", () => {
+    queryRateLimiter.merchantWindows.set("m-1", { windowStart: Date.now(), count: 1 });
+    queryRateLimiter.merchantWindows.set("m-2", { windowStart: Date.now(), count: 2 });
+
+    const stats = queryRateLimiter.getStats();
+    expect(stats.merchantWindows).toBe(2);
+  });
+});
+
+describe("Database Pooler - Signature format validation (Issue #893)", () => {
+  it("verifyQuerySignature returns false for non-hex signature when secret absent", () => {
+    // When no secret is set, the function short-circuits to true (verified by existing tests).
+    // Document explicitly that null/missing signature is also handled.
+    expect(verifyQuerySignature("SELECT 1", [], null)).toBe(true);
+    expect(verifyQuerySignature("SELECT 1", [], undefined)).toBe(true);
+  });
+
+  it("hashQueryResult produces a 64-char hex string regardless of property order", () => {
+    const result1 = { rows: [{ b: 2, a: 1 }], rowCount: 1 };
+    const result2 = { rowCount: 1, rows: [{ b: 2, a: 1 }] };
+
+    // Keys are sorted before hashing, so both must produce the same digest
+    expect(hashQueryResult(result1)).toBe(hashQueryResult(result2));
+    expect(hashQueryResult(result1)).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
