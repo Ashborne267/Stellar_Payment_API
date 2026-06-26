@@ -1,3 +1,5 @@
+import { AuditCircuitBreaker, CircuitState } from "../lib/audit-circuit-breaker.js";
+import { replayFallbackLogs } from "../lib/audit-replay.js";
 import { pool, isRetryablePoolError } from "../lib/db.js";
 import {
   consumeAuditLogRateLimit,
@@ -26,41 +28,31 @@ const AUDIT_DB_RETRY_DELAY_MS = Number.parseInt(process.env.AUDIT_DB_RETRY_DELAY
 const SVC_CIRCUIT_FAILURE_THRESHOLD = Number.parseInt(process.env.AUDIT_CIRCUIT_FAILURE_THRESHOLD || "5", 10);
 const SVC_CIRCUIT_RESET_MS = Number.parseInt(process.env.AUDIT_CIRCUIT_RESET_MS || "60000", 10);
 
-const _svcCircuit = {
-  open: false,
-  failures: 0,
-  openedAt: 0,
-};
+const svcCircuitBreaker = new AuditCircuitBreaker({
+  failureThreshold: SVC_CIRCUIT_FAILURE_THRESHOLD,
+  resetTimeoutMs: SVC_CIRCUIT_RESET_MS,
+  label: "audit-service",
+  onClose: () => {
+    replayFallbackLogs(AUDIT_FALLBACK_LOG_PATH).catch((err) => {
+      console.error("[Audit Replay] Fallback log replay failed:", err.message);
+    });
+  },
+});
 
 export function _resetSvcCircuitForTests() {
-  _svcCircuit.open = false;
-  _svcCircuit.failures = 0;
-  _svcCircuit.openedAt = 0;
+  svcCircuitBreaker.reset();
 }
 
 function isSvcCircuitOpen(now = Date.now()) {
-  if (!_svcCircuit.open) return false;
-  if (now - _svcCircuit.openedAt >= SVC_CIRCUIT_RESET_MS) {
-    _svcCircuit.open = false;
-    return false;
-  }
-  return true;
+  return svcCircuitBreaker.isOpen(now);
 }
 
 function recordSvcSuccess() {
-  _svcCircuit.failures = 0;
-  _svcCircuit.open = false;
+  svcCircuitBreaker.recordSuccess();
 }
 
 function recordSvcFailure(now = Date.now()) {
-  _svcCircuit.failures += 1;
-  if (_svcCircuit.failures >= SVC_CIRCUIT_FAILURE_THRESHOLD) {
-    _svcCircuit.open = true;
-    _svcCircuit.openedAt = now;
-    console.warn(
-      `[auditService] Circuit breaker opened after ${_svcCircuit.failures} consecutive failures. DB writes suspended for ${SVC_CIRCUIT_RESET_MS}ms.`,
-    );
-  }
+  svcCircuitBreaker.recordFailure(now);
 }
 
 function sleep(ms) {

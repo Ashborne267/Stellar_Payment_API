@@ -1,18 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 
-const { mockQuery, mockIsRetryablePoolError, mockConsumeRateLimit, mockHashPayload, mockSignPayload, mockValidateAuditAction } = vi.hoisted(() => ({
+const { mockQuery, mockIsRetryablePoolError, mockConsumeRateLimit, mockHashPayload, mockSignPayload, mockValidateAuditAction, mockReplayFallbackLogs } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
   mockIsRetryablePoolError: vi.fn(),
   mockConsumeRateLimit: vi.fn(),
   mockHashPayload: vi.fn(),
   mockSignPayload: vi.fn(),
   mockValidateAuditAction: vi.fn(() => true),
+  mockReplayFallbackLogs: vi.fn().mockResolvedValue(),
 }));
 
 vi.mock("../lib/db.js", () => ({
   pool: { query: mockQuery },
   isRetryablePoolError: mockIsRetryablePoolError,
+}));
+
+vi.mock("../lib/audit-replay.js", () => ({
+  replayFallbackLogs: mockReplayFallbackLogs,
 }));
 
 vi.mock("../lib/audit-security.js", () => ({
@@ -175,7 +180,7 @@ describe("auditService", () => {
 
   // ── Circuit breaker: logEvent (issue #771) ─────────────────────────────────
 
-  it("opens circuit breaker after repeated DB failures and routes to fallback", async () => {
+  it("opens circuit breaker after repeated DB failures, transitions to HALF_OPEN, recovers to CLOSED on success, and triggers replay", async () => {
     const permError = new Error("connection refused");
     mockQuery.mockRejectedValue(permError);
     mockIsRetryablePoolError.mockReturnValue(false);
@@ -185,15 +190,34 @@ describe("auditService", () => {
 
     const appendFileSyncSpy = vi.spyOn(fs, "appendFileSync").mockImplementation(() => {});
 
-    for (let i = 0; i < 6; i += 1) {
+    // 1. Trip the circuit breaker (5 failures required)
+    for (let i = 0; i < 5; i += 1) {
       await auditService.logEvent({ merchantId: `m-${i}`, action: "update", fieldChanged: "email" });
     }
 
-    const callsBeforeOpen = mockQuery.mock.calls.length;
-    await auditService.logEvent({ merchantId: "m-open", action: "update", fieldChanged: "email" });
-    expect(mockQuery.mock.calls.length).toBe(callsBeforeOpen);
-    expect(appendFileSyncSpy).toHaveBeenCalled();
+    mockQuery.mockClear();
 
+    // 2. Subsequent call while open bypasses the DB
+    await auditService.logEvent({ merchantId: "m-open", action: "update", fieldChanged: "email" });
+    expect(mockQuery).not.toHaveBeenCalled();
+
+    // 3. Move time forward past reset timeout to enter HALF_OPEN state
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 65000);
+
+    // 4. In HALF_OPEN, first success does not yet close the circuit
+    mockQuery.mockResolvedValue({ rows: [] });
+    await auditService.logEvent({ merchantId: "m-probe-1", action: "update", fieldChanged: "email" });
+    expect(mockQuery).toHaveBeenCalledOnce();
+    expect(mockReplayFallbackLogs).not.toHaveBeenCalled();
+
+    mockQuery.mockClear();
+
+    // 5. Second success closes the circuit and triggers replay
+    await auditService.logEvent({ merchantId: "m-probe-2", action: "update", fieldChanged: "email" });
+    expect(mockQuery).toHaveBeenCalledOnce();
+    expect(mockReplayFallbackLogs).toHaveBeenCalledOnce();
+
+    nowSpy.mockRestore();
     appendFileSyncSpy.mockRestore();
   });
 
