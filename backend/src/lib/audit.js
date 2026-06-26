@@ -10,6 +10,8 @@
  * - `status` is stored as a suffix of the `action` field: 'login_success' | 'login_failure'.
  */
 
+import { AuditCircuitBreaker, CircuitState } from "./audit-circuit-breaker.js";
+import { replayFallbackLogs } from "./audit-replay.js";
 import { pool, isRetryablePoolError } from "./db.js";
 import {
   consumeAuditLogRateLimit,
@@ -37,46 +39,40 @@ const AUDIT_DB_RETRY_DELAY_MS = Number.parseInt(process.env.AUDIT_DB_RETRY_DELAY
 const CIRCUIT_FAILURE_THRESHOLD = Number.parseInt(process.env.AUDIT_CIRCUIT_FAILURE_THRESHOLD || "5", 10);
 const CIRCUIT_RESET_MS = Number.parseInt(process.env.AUDIT_CIRCUIT_RESET_MS || "60000", 10);
 
-const _auditCircuit = {
-  open: false,
-  failures: 0,
-  openedAt: 0,
-};
+const auditCircuitBreaker = new AuditCircuitBreaker({
+  failureThreshold: CIRCUIT_FAILURE_THRESHOLD,
+  resetTimeoutMs: CIRCUIT_RESET_MS,
+  label: "audit-helper",
+  onClose: () => {
+    replayFallbackLogs(AUDIT_FALLBACK_LOG_PATH).catch((err) => {
+      console.error("[Audit Replay] Fallback log replay failed:", err.message);
+    });
+  },
+});
 
 export function getAuditCircuitState() {
-  return { ..._auditCircuit };
+  return {
+    open: auditCircuitBreaker.state === CircuitState.OPEN,
+    failures: auditCircuitBreaker.failures,
+    openedAt: auditCircuitBreaker.openedAt,
+    state: auditCircuitBreaker.state,
+  };
 }
 
 export function _resetAuditCircuitForTests() {
-  _auditCircuit.open = false;
-  _auditCircuit.failures = 0;
-  _auditCircuit.openedAt = 0;
+  auditCircuitBreaker.reset();
 }
 
 function isCircuitOpen(now = Date.now()) {
-  if (!_auditCircuit.open) return false;
-  if (now - _auditCircuit.openedAt >= CIRCUIT_RESET_MS) {
-    // Half-open: allow a single probe through
-    _auditCircuit.open = false;
-    return false;
-  }
-  return true;
+  return auditCircuitBreaker.isOpen(now);
 }
 
 function recordCircuitSuccess() {
-  _auditCircuit.failures = 0;
-  _auditCircuit.open = false;
+  auditCircuitBreaker.recordSuccess();
 }
 
 function recordCircuitFailure(now = Date.now()) {
-  _auditCircuit.failures += 1;
-  if (_auditCircuit.failures >= CIRCUIT_FAILURE_THRESHOLD) {
-    _auditCircuit.open = true;
-    _auditCircuit.openedAt = now;
-    console.warn(
-      `[audit] Circuit breaker opened after ${_auditCircuit.failures} consecutive failures. DB writes suspended for ${CIRCUIT_RESET_MS}ms.`,
-    );
-  }
+  auditCircuitBreaker.recordFailure(now);
 }
 
 function sleep(ms) {

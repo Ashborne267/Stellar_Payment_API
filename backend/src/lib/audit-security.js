@@ -29,17 +29,28 @@ const ALLOWED_AUDIT_ACTIONS = new Set([
 
 const auditRateLimitState = new Map();
 
-function stableStringify(value) {
+function stableStringify(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 10) {
+    return '"[Too Deep]"';
+  }
   if (value === null || value === undefined) return "null";
   if (typeof value !== "object") return JSON.stringify(value);
 
+  if (seen.has(value)) {
+    return '"[Circular]"';
+  }
+  seen.add(value);
+
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    const serialized = value.map((item) => stableStringify(item, depth + 1, seen)).join(",");
+    seen.delete(value);
+    return `[${serialized}]`;
   }
 
   const entries = Object.entries(value)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested)}`);
+    .map(([key, nested]) => `${JSON.stringify(key)}:${stableStringify(nested, depth + 1, seen)}`);
+  seen.delete(value);
   return `{${entries.join(",")}}`;
 }
 
@@ -143,6 +154,22 @@ export function consumeAuditLogRateLimit(
 ) {
   if (!key) return { allowed: true, remaining: max, resetTime: now + windowMs };
 
+  // Evict expired entries if Map size exceeds safety threshold (DoS / OOM protection)
+  if (auditRateLimitState.size >= 10000) {
+    for (const [k, v] of auditRateLimitState.entries()) {
+      if (now >= v.windowStart + windowMs) {
+        auditRateLimitState.delete(k);
+      }
+    }
+    // Hard cap eviction if still over threshold
+    if (auditRateLimitState.size >= 10000) {
+      const oldestKeys = Array.from(auditRateLimitState.keys()).slice(0, 100);
+      for (const k of oldestKeys) {
+        auditRateLimitState.delete(k);
+      }
+    }
+  }
+
   const current = auditRateLimitState.get(key);
   if (!current || now >= current.windowStart + windowMs) {
     const next = { count: 1, windowStart: now };
@@ -167,6 +194,124 @@ export function consumeAuditLogRateLimit(
   };
 }
 
+/**
+ * Get comprehensive rate limit statistics for audit logging (issue #902).
+ * Useful for monitoring and debugging rate limit behavior.
+ */
+export function getAuditRateLimitStats() {
+  const now = Date.now();
+  const stats = {
+    totalKeys: auditRateLimitState.size,
+    activeWindows: 0,
+    expiredWindows: 0,
+    maxRequestsPerWindow: Number(process.env.AUDIT_LOG_RATE_LIMIT_MAX || DEFAULT_AUDIT_RATE_LIMIT_MAX),
+    windowMs: Number(process.env.AUDIT_LOG_RATE_LIMIT_WINDOW_MS || DEFAULT_AUDIT_RATE_LIMIT_WINDOW_MS),
+  };
+
+  for (const [key, state] of auditRateLimitState.entries()) {
+    if (now >= state.windowStart + stats.windowMs) {
+      stats.expiredWindows++;
+    } else {
+      stats.activeWindows++;
+    }
+  }
+
+  return stats;
+}
+
+/**
+ * Cleanup expired audit rate limit entries to prevent memory exhaustion (issue #902).
+ * Should be called periodically (e.g., via cron or on a schedule).
+ */
+export function cleanupExpiredAuditRateLimits() {
+  const now = Date.now();
+  const windowMs = Number(
+    process.env.AUDIT_LOG_RATE_LIMIT_WINDOW_MS || DEFAULT_AUDIT_RATE_LIMIT_WINDOW_MS,
+  );
+  const staleThreshold = windowMs * 2; // Remove entries older than 2x the window
+
+  let cleaned = 0;
+  for (const [key, state] of auditRateLimitState.entries()) {
+    if (now - state.windowStart > staleThreshold) {
+      auditRateLimitState.delete(key);
+      cleaned++;
+    }
+  }
+
+  return cleaned;
+}
+
 export function resetAuditRateLimitStateForTests() {
   auditRateLimitState.clear();
+}
+
+/**
+ * Reconstructs the original audit log payload from a database row.
+ *
+ * @param {object} row
+ * @returns {object}
+ */
+export function reconstructPayloadFromRow(row) {
+  if (!row) return {};
+  if (row.action === "login") {
+    return {
+      merchant_id: row.merchant_id ?? null,
+      action: row.action,
+      status: row.status ?? null,
+      ip_address: row.ip_address ?? null,
+      user_agent: row.user_agent ?? null,
+      event_type: "login_attempt",
+    };
+  } else {
+    return {
+      merchant_id: row.merchant_id ?? null,
+      action: row.action,
+      field_changed: row.field_changed ?? null,
+      old_value: row.old_value ?? null,
+      new_value: row.new_value ?? null,
+      ip_address: row.ip_address ?? null,
+      user_agent: row.user_agent ?? null,
+    };
+  }
+}
+
+/**
+ * Validates the cryptographic integrity of a single audit log database row.
+ *
+ * @param {object} row
+ * @param {string} [secret] - Optional signing secret
+ * @returns {{ verified: boolean, status: string, reason?: string }}
+ */
+export function verifyRowIntegrity(row, secret = process.env.AUDIT_LOG_SIGNING_SECRET) {
+  if (!row) {
+    return { verified: false, status: "failed", reason: "empty_row" };
+  }
+  if (!row.payload_hash) {
+    return { verified: false, status: "failed", reason: "missing_hash" };
+  }
+
+  try {
+    const payload = reconstructPayloadFromRow(row);
+    const expectedHash = hashAuditPayload(payload);
+
+    if (row.payload_hash !== expectedHash) {
+      return { verified: false, status: "failed", reason: "hash_mismatch" };
+    }
+
+    if (!row.signature) {
+      return { verified: true, status: "unsigned_verified" };
+    }
+
+    if (secret) {
+      const signatureValid = verifyAuditSignature(payload, row.signature, secret);
+      if (!signatureValid) {
+        return { verified: false, status: "failed", reason: "signature_invalid" };
+      }
+      return { verified: true, status: "verified" };
+    }
+
+    return { verified: true, status: "unsigned_verified" };
+  } catch (err) {
+    return { verified: false, status: "failed", reason: `error: ${err.message}` };
+  }
 }

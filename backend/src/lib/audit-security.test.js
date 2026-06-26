@@ -9,6 +9,8 @@ import {
   signAuditPayload,
   validateAuditAction,
   verifyAuditSignature,
+  verifyRowIntegrity,
+  reconstructPayloadFromRow,
 } from "./audit-security.js";
 
 describe("audit-security", () => {
@@ -137,5 +139,83 @@ describe("audit-security", () => {
     expect(first.allowed).toBe(true);
     expect(second.allowed).toBe(true);
     expect(third.allowed).toBe(false);
+  });
+
+  // ── security audit additions ──────────────────────────────────────────────
+
+  it("handles circular references and deep structures in stableStringify safely", () => {
+    const obj = {};
+    obj.self = obj; // circular reference
+
+    const result = hashAuditPayload(obj);
+    expect(result).toMatch(/^[a-f0-9]{64}$/);
+
+    const deepObj = {};
+    let current = deepObj;
+    for (let i = 0; i < 15; i += 1) {
+      current.next = {};
+      current = current.next;
+    }
+    const deepResult = hashAuditPayload(deepObj);
+    expect(deepResult).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("prevents rate limit state OOM by evicting keys when size exceeds limit", () => {
+    for (let i = 0; i < 10005; i += 1) {
+      const key = `merchant:action:${i}`;
+      consumeAuditLogRateLimit(key, {
+        now: 1000,
+        max: 5,
+        windowMs: 60000,
+      });
+    }
+
+    const lastKey = "merchant:action:last";
+    const res = consumeAuditLogRateLimit(lastKey, {
+      now: 70000,
+      max: 5,
+      windowMs: 60000,
+    });
+    expect(res.allowed).toBe(true);
+  });
+
+  it("reconstructs payloads and verifies row integrity correctly", () => {
+    const secret = "test-secret-key";
+    const row = {
+      merchant_id: "merchant-1",
+      action: "update",
+      field_changed: "email",
+      old_value: "a@b.com",
+      new_value: "c@d.com",
+      ip_address: "1.2.3.4",
+      user_agent: "ua",
+      payload_hash: null,
+      signature: null,
+    };
+
+    const res1 = verifyRowIntegrity(row, secret);
+    expect(res1.status).toBe("failed");
+    expect(res1.reason).toBe("missing_hash");
+
+    const payload = {
+      merchant_id: "merchant-1",
+      action: "update",
+      field_changed: "email",
+      old_value: "a@b.com",
+      new_value: "c@d.com",
+      ip_address: "1.2.3.4",
+      user_agent: "ua",
+    };
+    row.payload_hash = hashAuditPayload(payload);
+    const res2 = verifyRowIntegrity(row, secret);
+    expect(res2.status).toBe("unsigned_verified");
+
+    row.signature = signAuditPayload(payload, secret);
+    const res3 = verifyRowIntegrity(row, secret);
+    expect(res3.status).toBe("verified");
+
+    row.payload_hash = "wrong-hash";
+    const res4 = verifyRowIntegrity(row, secret);
+    expect(res4.status).toBe("failed");
   });
 });

@@ -22,6 +22,12 @@ const {
   mockGetPayloadForVersion,
   mockPaymentConfirmedCounter,
   mockPaymentConfirmationLatency,
+  mockLedgerMonitorCycleDuration,
+  mockLedgerMonitorPaymentsChecked,
+  mockLedgerMonitorCircuitBreakerTrips,
+  mockRateLimitRequestsTotal,
+  mockRateLimitExceededTotal,
+  mockLogger,
 } = vi.hoisted(() => ({
   mockFindMatchingPayment: vi.fn(),
   mockFindAnyRecentPayment: vi.fn(),
@@ -37,6 +43,12 @@ const {
   mockGetPayloadForVersion: vi.fn(),
   mockPaymentConfirmedCounter: { inc: vi.fn() },
   mockPaymentConfirmationLatency: { observe: vi.fn() },
+  mockLedgerMonitorCycleDuration: { observe: vi.fn() },
+  mockLedgerMonitorPaymentsChecked: { inc: vi.fn() },
+  mockLedgerMonitorCircuitBreakerTrips: { inc: vi.fn() },
+  mockRateLimitRequestsTotal: { inc: vi.fn() },
+  mockRateLimitExceededTotal: { inc: vi.fn() },
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
 vi.mock("./stellar.js", () => ({
@@ -80,15 +92,15 @@ vi.mock("../webhooks/resolver.js", () => ({
 vi.mock("./metrics.js", () => ({
   paymentConfirmedCounter: mockPaymentConfirmedCounter,
   paymentConfirmationLatency: mockPaymentConfirmationLatency,
+  ledgerMonitorCycleDuration: mockLedgerMonitorCycleDuration,
+  ledgerMonitorPaymentsChecked: mockLedgerMonitorPaymentsChecked,
+  ledgerMonitorCircuitBreakerTrips: mockLedgerMonitorCircuitBreakerTrips,
+  rateLimitRequestsTotal: mockRateLimitRequestsTotal,
+  rateLimitExceededTotal: mockRateLimitExceededTotal,
 }));
 
 vi.mock("./logger.js", () => ({
-  logger: {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  },
+  logger: mockLogger,
 }));
 
 // ── Import after mocks ────────────────────────────────────────────────────────
@@ -104,6 +116,14 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// Valid Stellar public keys (pass ledger-monitor-security validatePaymentRecord).
+const VALID_RECIPIENT_A = "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI";
+const VALID_RECIPIENT_B = "GCEZWKCA5VLDNRLN3RPRJMR3PXJHUWB2TVXVDZQEQ3GTKEX2OQ2BYE4Z";
+
+// Valid 64-char hex transaction hashes (pass isValidTransactionHash).
+const VALID_TX_HASH = "a".repeat(64);
+const VALID_TX_HASH_B = "b".repeat(64);
+
 /** Build a minimal pending payment fixture. */
 function makePayment(overrides = {}) {
   return {
@@ -111,7 +131,7 @@ function makePayment(overrides = {}) {
     amount: "10.0000000",
     asset: "XLM",
     asset_issuer: null,
-    recipient: "GABC",
+    recipient: "GBZXN7PIRZGNMHGA7MUUUF4GWPY5AYPV6LY4UV2GL6VJGIQRXFDNMADI",
     memo: null,
     memo_type: null,
     webhook_url: "https://example.com/webhook",
@@ -173,6 +193,12 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
       expect(health.circuitBreakerOpen).toBe(false);
       expect(health.backoffIndex).toBe(0);
     });
+
+    it("exposes Horizon rate-limit observability (Issue #907)", () => {
+      const health = getPollerHealth();
+      expect(health.horizonRequestsPerSecond).toBeGreaterThan(0);
+      expect(health.rateLimitedRequests).toBe(0);
+    });
   });
 
   // ── resetPollerState ────────────────────────────────────────────────────────
@@ -192,15 +218,22 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
     it("confirms a matching payment and emits events", async () => {
       const payment = makePayment();
 
-      // The poller makes 3 calls to supabase.from("payments"):
-      //   1. Fetch pending payments (select + order + limit)
-      //   2. Duplicate-tx guard (select + neq + maybeSingle → null)
-      //   3. Atomic update (update + maybeSingle → { id })
-      //   4. Merchant notification config lookup
-      let fromCallCount = 0;
-      mockSupabaseFrom.mockImplementation(() => {
-        fromCallCount += 1;
-        if (fromCallCount === 1) {
+      // Table-aware mock. The poller now batch-loads merchant configs via one
+      // merchants `.in(...)` query, then per payment: dup-tx guard + atomic update.
+      let paymentsCallCount = 0;
+      mockSupabaseFrom.mockImplementation((table) => {
+        if (table === "merchants") {
+          // Batch merchant preload (single IN query).
+          return {
+            select: vi.fn().mockReturnThis(),
+            in: vi.fn().mockResolvedValue({
+              data: [{ id: payment.merchant_id, ...makeMerchant() }],
+              error: null,
+            }),
+          };
+        }
+        paymentsCallCount += 1;
+        if (paymentsCallCount === 1) {
           // Fetch pending payments
           return {
             select: vi.fn().mockReturnThis(),
@@ -211,7 +244,7 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
             limit: vi.fn().mockResolvedValue({ data: [payment], error: null }),
           };
         }
-        if (fromCallCount === 2) {
+        if (paymentsCallCount === 2) {
           // Duplicate-tx guard — no conflict
           return {
             select: vi.fn().mockReturnThis(),
@@ -221,27 +254,20 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
             maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
           };
         }
-        if (fromCallCount === 3) {
-          // Atomic update — success
-          return {
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnThis(),
-              is: vi.fn().mockReturnThis(),
-              select: vi.fn().mockReturnThis(),
-              maybeSingle: vi.fn().mockResolvedValue({ data: { id: payment.id }, error: null }),
-            }),
-          };
-        }
+        // Atomic update — success
         return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: vi.fn().mockResolvedValue({ data: makeMerchant(), error: null }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: payment.id }, error: null }),
+          }),
         };
       });
 
       mockFindMatchingPayment.mockResolvedValue({
         id: "op-1",
-        transaction_hash: "tx-abc",
+        transaction_hash: VALID_TX_HASH,
         received_amount: "10.0000000",
       });
       mockVerifyTransactionSignature.mockResolvedValue({
@@ -255,13 +281,13 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
       await pollOnce();
 
       expect(mockFindMatchingPayment).toHaveBeenCalledWith(
-        expect.objectContaining({ recipient: "GABC", amount: "10.0000000" })
+        expect.objectContaining({ recipient: payment.recipient, amount: "10.0000000" })
       );
-      expect(mockVerifyTransactionSignature).toHaveBeenCalledWith("tx-abc");
+      expect(mockVerifyTransactionSignature).toHaveBeenCalledWith(VALID_TX_HASH);
       expect(mockStreamManagerNotify).toHaveBeenCalledWith(
         payment.id,
         "payment.confirmed",
-        expect.objectContaining({ status: "confirmed", tx_id: "tx-abc" })
+        expect.objectContaining({ status: "confirmed", tx_id: VALID_TX_HASH })
       );
     });
   });
@@ -619,10 +645,20 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
     it("continues confirmation when merchant notification config lookup fails", async () => {
       const payment = makePayment();
 
-      let fromCallCount = 0;
-      mockSupabaseFrom.mockImplementation(() => {
-        fromCallCount += 1;
-        if (fromCallCount === 1) {
+      // Merchant lookups fail both in the batch preload (.in) and the
+      // per-payment fallback (.eq + maybeSingle); confirmation must still proceed.
+      let paymentsCallCount = 0;
+      mockSupabaseFrom.mockImplementation((table) => {
+        if (table === "merchants") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            in: vi.fn().mockResolvedValue({ data: null, error: { message: "merchant lookup failed" } }),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "merchant lookup failed" } }),
+          };
+        }
+        paymentsCallCount += 1;
+        if (paymentsCallCount === 1) {
           return {
             select: vi.fn().mockReturnThis(),
             eq: vi.fn().mockReturnThis(),
@@ -632,7 +668,7 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
             limit: vi.fn().mockResolvedValue({ data: [payment], error: null }),
           };
         }
-        if (fromCallCount === 2) {
+        if (paymentsCallCount === 2) {
           return {
             select: vi.fn().mockReturnThis(),
             eq: vi.fn().mockReturnThis(),
@@ -640,27 +676,19 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
             maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
           };
         }
-        if (fromCallCount === 3) {
-          return {
-            update: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnThis(),
-              is: vi.fn().mockReturnThis(),
-              select: vi.fn().mockReturnThis(),
-              maybeSingle: vi.fn().mockResolvedValue({ data: { id: payment.id }, error: null }),
-            }),
-          };
-        }
-
         return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "merchant lookup failed" } }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: payment.id }, error: null }),
+          }),
         };
       });
 
       mockFindMatchingPayment.mockResolvedValue({
         id: "op-1",
-        transaction_hash: "tx-abc",
+        transaction_hash: VALID_TX_HASH,
         received_amount: "10.0000000",
       });
 
@@ -671,15 +699,22 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
     });
 
     it("caches merchant notification config within one poll cycle", async () => {
+      // Same recipient+asset → one group → processed sequentially, so the
+      // shared merchant-config cache is exercised deterministically.
       const payments = [
-        makePayment({ id: "pay-001", recipient: "GA", merchant_id: "merchant-001" }),
-        makePayment({ id: "pay-002", recipient: "GA", merchant_id: "merchant-001" }),
+        makePayment({ id: "pay-001", recipient: VALID_RECIPIENT_A, merchant_id: "merchant-001" }),
+        makePayment({ id: "pay-002", recipient: VALID_RECIPIENT_A, merchant_id: "merchant-001" }),
       ];
       let paymentsCallCount = 0;
       mockSupabaseFrom.mockImplementation((table) => {
         if (table === "merchants") {
+          // Single batched preload via .in(...) for the whole pending batch.
           return {
             select: vi.fn().mockReturnThis(),
+            in: vi.fn().mockResolvedValue({
+              data: [{ id: "merchant-001", ...makeMerchant() }],
+              error: null,
+            }),
             eq: vi.fn().mockReturnThis(),
             maybeSingle: vi.fn().mockResolvedValue({ data: makeMerchant(), error: null }),
           };
@@ -718,7 +753,7 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
       mockFindMatchingPayment.mockImplementation(({ recipient }) =>
         Promise.resolve({
           id: `op-${recipient}`,
-          transaction_hash: `tx-${recipient}`,
+          transaction_hash: VALID_TX_HASH,
           received_amount: "10.0000000",
         })
       );
@@ -747,6 +782,47 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
       await limiter.waitForSlot();
 
       expect(sleepFn).toHaveBeenCalledWith(500);
+    });
+
+    it("emits rate-limit metrics and tracks throttled requests (Issue #907)", async () => {
+      let now = 0;
+      const sleepFn = vi.fn(async (ms) => {
+        now += ms;
+      });
+      const limiter = createLedgerMonitorRateLimiter({
+        maxPerSecond: 2,
+        burst: 1,
+        now: () => now,
+        sleepFn,
+      });
+
+      await limiter.waitForSlot(); // uses the single burst token (allowed)
+      await limiter.waitForSlot(); // no token → throttled
+
+      // Every request is counted; only the throttled one trips "exceeded".
+      expect(mockRateLimitRequestsTotal.inc).toHaveBeenCalledTimes(2);
+      expect(mockRateLimitRequestsTotal.inc).toHaveBeenCalledWith({
+        endpoint: "ledger_monitor",
+        type: "horizon",
+      });
+      expect(mockRateLimitExceededTotal.inc).toHaveBeenCalledTimes(1);
+      expect(mockRateLimitExceededTotal.inc).toHaveBeenCalledWith({
+        endpoint: "ledger_monitor",
+        type: "horizon",
+      });
+      expect(limiter.stats().rateLimitedRequests).toBe(1);
+
+      limiter.reset();
+      expect(limiter.stats().rateLimitedRequests).toBe(0);
+    });
+
+    it("does not count un-throttled requests as exceeded", async () => {
+      const limiter = createLedgerMonitorRateLimiter({ maxPerSecond: 5, burst: 5 });
+      await limiter.waitForSlot();
+      await limiter.waitForSlot();
+
+      expect(mockRateLimitExceededTotal.inc).not.toHaveBeenCalled();
+      expect(limiter.stats().rateLimitedRequests).toBe(0);
     });
   });
 
@@ -782,6 +858,114 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
 
       expect(updateMock).not.toHaveBeenCalled();
       expect(mockStreamManagerNotify).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("cycle result aggregation (Issue #910)", () => {
+    it("logs a rejected payment group without aborting the cycle", async () => {
+      const payment = makePayment();
+
+      mockSupabaseFrom.mockImplementation(() => ({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        is: vi.fn().mockReturnThis(),
+        gte: vi.fn().mockReturnThis(),
+        order: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockResolvedValue({ data: [payment], error: null }),
+      }));
+
+      // Drive checkPayment into its own catch, then make the metric call in that
+      // catch throw too — so the group promise rejects and the cycle's
+      // Promise.allSettled accounting loop must handle it (this is the path the
+      // old `results` ReferenceError silently broke).
+      mockFindMatchingPayment.mockRejectedValue(new Error("horizon down"));
+      mockLedgerMonitorPaymentsChecked.inc.mockImplementation(() => {
+        throw new Error("metrics backend unavailable");
+      });
+
+      // Must resolve (not reject): allSettled isolates the rejected group.
+      await expect(pollOnce()).resolves.toBeUndefined();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.any(Error) }),
+        "Horizon poller: payment group processing failed",
+      );
+      // The old ReferenceError surfaced via the outer catch with this message;
+      // it must NOT happen anymore.
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        "Horizon poller: unexpected error in poll cycle",
+      );
+    });
+  });
+
+  describe("SQL query optimization — batch merchant preload", () => {
+    it("loads all merchant configs in a single IN query (no N+1 per-payment lookups)", async () => {
+      // Two distinct merchants across the batch.
+      const payments = [
+        makePayment({ id: "pay-1", recipient: VALID_RECIPIENT_A, merchant_id: "merchant-001" }),
+        makePayment({ id: "pay-2", recipient: VALID_RECIPIENT_B, merchant_id: "merchant-002" }),
+      ];
+
+      const inMock = vi.fn().mockResolvedValue({
+        data: [
+          { id: "merchant-001", ...makeMerchant() },
+          { id: "merchant-002", ...makeMerchant() },
+        ],
+        error: null,
+      });
+      const merchantEqMock = vi.fn().mockReturnThis();
+
+      mockSupabaseFrom.mockImplementation((table) => {
+        if (table === "merchants") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            in: inMock,
+            // Per-payment fallback path — must NOT be used when preload succeeds.
+            eq: merchantEqMock,
+            maybeSingle: vi.fn().mockResolvedValue({ data: makeMerchant(), error: null }),
+          };
+        }
+        // payments: fetch, then per-payment dup guard + update (table-agnostic shape).
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          neq: vi.fn().mockReturnThis(),
+          is: vi.fn().mockReturnThis(),
+          gte: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockResolvedValue({ data: payments, error: null }),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: "updated" }, error: null }),
+          }),
+        };
+      });
+
+      mockFindMatchingPayment.mockResolvedValue({
+        id: "op-x",
+        transaction_hash: VALID_TX_HASH,
+        received_amount: "10.0000000",
+      });
+
+      await pollOnce();
+
+      // Exactly one batched merchants query for the whole batch...
+      const merchantTableCalls = mockSupabaseFrom.mock.calls.filter(
+        ([table]) => table === "merchants",
+      );
+      expect(merchantTableCalls).toHaveLength(1);
+      // ...containing both distinct merchant ids...
+      expect(inMock).toHaveBeenCalledTimes(1);
+      expect(inMock).toHaveBeenCalledWith(
+        "id",
+        expect.arrayContaining(["merchant-001", "merchant-002"]),
+      );
+      // ...and no per-payment merchant fallback lookups.
+      expect(merchantEqMock).not.toHaveBeenCalled();
     });
   });
 });
