@@ -249,7 +249,18 @@ export function verifyQuerySignature(text, values, signature) {
  * @returns {string} SHA-256 hash of the serialized result
  */
 export function hashQueryResult(result) {
-  const serialized = JSON.stringify(result, Object.keys(result).sort());
+  // Recursively sort object keys before serialising so the hash is
+  // deterministic regardless of insertion order, while still capturing
+  // all nested values (using an array replacer would strip keys at depth > 1).
+  const sortedReplacer = (_, value) => {
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      return Object.fromEntries(
+        Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+      );
+    }
+    return value;
+  };
+  const serialized = JSON.stringify(result, sortedReplacer);
   return createHash("sha256").update(serialized).digest("hex");
 }
 
