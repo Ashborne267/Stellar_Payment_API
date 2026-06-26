@@ -478,12 +478,11 @@ export const paymentService = {
           throw error;
         }
       } catch (recoveryError) {
-        console.error("Asset issuer verification failed with recovery:", recoveryError);
-        // If it's a transient failure we might still want to proceed or fail-safe?
-        // Let's fail-safe for security if it's not a 404 but a real error
-        if (recoveryError.status !== 404) {
-          // Re-throw if it wasn't a "not found" but something else that recovery failed to handle
-          // after max retries/circuit breaker
+        logger.error({ err: recoveryError }, "Asset issuer verification failed with recovery");
+        // Only swallow explicit 400 "not found" from the on-chain check.
+        // Any other error (network timeout, missing .status, 5xx) fails safe
+        // to prevent payment sessions being created with unverified issuers.
+        if (recoveryError.status !== 400) {
           throw recoveryError;
         }
       }
