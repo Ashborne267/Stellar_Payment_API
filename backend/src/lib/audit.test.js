@@ -24,6 +24,7 @@ const { mockQuery, mockIsRetryablePoolError, mockConsumeRateLimit, mockHashPaylo
 vi.mock("./db.js", () => ({
   pool: { query: mockQuery },
   isRetryablePoolError: mockIsRetryablePoolError,
+  queryWithRetry: mockQuery,
 }));
 
 vi.mock("./audit-security.js", () => ({
