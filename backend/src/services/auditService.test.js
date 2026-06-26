@@ -29,6 +29,7 @@ vi.mock("../lib/audit-security.js", () => ({
   sanitizeAuditValue: vi.fn((v) => v),
   signAuditPayload: mockSignPayload,
   validateAuditAction: mockValidateAuditAction,
+  verifyAuditSignature: mockVerifySignature,
 }));
 
 import { auditService, _resetSvcCircuitForTests } from "./auditService.js";
@@ -42,6 +43,7 @@ describe("auditService", () => {
     mockSignPayload.mockReset();
     mockValidateAuditAction.mockReset();
     mockValidateAuditAction.mockReturnValue(true);
+    mockVerifySignature.mockReset();
     _resetSvcCircuitForTests();
   });
 
@@ -171,6 +173,90 @@ describe("auditService", () => {
     expect(params[1]).toBe(100); // limit clamped to 100
     expect(params[2]).toBe(0);   // offset for page 1 = 0
     expect(result.page).toBe(1);
+  });
+
+  it("verifies matching payload hash and signature during retrieval", async () => {
+    process.env.AUDIT_LOG_SIGNING_SECRET = "test-secret";
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "log-1",
+          merchant_id: "merchant-1",
+          action: "update",
+          field_changed: "email",
+          old_value: "a@b.com",
+          new_value: "c@d.com",
+          ip_address: "1.2.3.4",
+          user_agent: "ua",
+          timestamp: new Date(),
+          payload_hash: "calculated-hash",
+          signature: "valid-signature",
+          total_count: "1",
+        },
+      ],
+    });
+
+    mockHashPayload.mockReturnValue("calculated-hash");
+    mockVerifySignature.mockReturnValue(true);
+
+    const result = await auditService.getAuditLogs("merchant-1", 1, 10);
+    expect(result.logs[0].hash_verified).toBe(true);
+    expect(result.logs[0].signature_verified).toBe(true);
+  });
+
+  it("detects mismatching/tampered hash and signature during retrieval", async () => {
+    process.env.AUDIT_LOG_SIGNING_SECRET = "test-secret";
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "log-2",
+          merchant_id: "merchant-1",
+          action: "update",
+          field_changed: "email",
+          old_value: "a@b.com",
+          new_value: "c@d.com",
+          ip_address: "1.2.3.4",
+          user_agent: "ua",
+          timestamp: new Date(),
+          payload_hash: "calculated-hash",
+          signature: "invalid-signature",
+          total_count: "1",
+        },
+      ],
+    });
+
+    mockHashPayload.mockReturnValue("different-hash");
+    mockVerifySignature.mockReturnValue(false);
+
+    const result = await auditService.getAuditLogs("merchant-1", 1, 10);
+    expect(result.logs[0].hash_verified).toBe(false);
+    expect(result.logs[0].signature_verified).toBe(false);
+  });
+
+  it("handles missing/null signatures or unset signing secret gracefully", async () => {
+    delete process.env.AUDIT_LOG_SIGNING_SECRET;
+    mockQuery.mockResolvedValueOnce({
+      rows: [
+        {
+          id: "log-3",
+          merchant_id: "merchant-1",
+          action: "update",
+          field_changed: "email",
+          old_value: "a@b.com",
+          new_value: "c@d.com",
+          ip_address: "1.2.3.4",
+          user_agent: "ua",
+          timestamp: new Date(),
+          payload_hash: null,
+          signature: null,
+          total_count: "1",
+        },
+      ],
+    });
+
+    const result = await auditService.getAuditLogs("merchant-1", 1, 10);
+    expect(result.logs[0].hash_verified).toBeNull();
+    expect(result.logs[0].signature_verified).toBeNull();
   });
 
   // ── Action validation (issue #772) ────────────────────────────────────────
