@@ -21,6 +21,17 @@ import {
   dbPoolerSignatureVerified,
 } from "./metrics.js";
 
+// Error recovery #895: Circuit breaker for database pool failures
+const DB_POOLER_CIRCUIT_BREAKER_THRESHOLD = 30;
+const DB_POOLER_CIRCUIT_BREAKER_RESET_MS = 120000;
+let _dbPoolerCircuitBreakerFailures = 0;
+let _dbPoolerCircuitBreakerLastFailureTime = 0;
+let _dbPoolerCircuitBreakerOpen = false;
+
+// Error recovery #895: Fallback to direct pool query when optimized path fails
+let _useFallbackMode = false;
+let _fallbackModeExpiry = 0;
+
 // ── Configuration ──────────────────────────────────────────────────────────────
 
 const SIGNING_SECRET = process.env.DB_POOLER_SIGNING_SECRET || null;
@@ -176,6 +187,71 @@ class QueryRateLimiter {
 // Singleton rate limiter
 const queryRateLimiter = new QueryRateLimiter();
 
+// Error recovery #895: Circuit breaker management
+export function _resetDbPoolerCircuitBreakerForTests() {
+  _dbPoolerCircuitBreakerFailures = 0;
+  _dbPoolerCircuitBreakerLastFailureTime = 0;
+  _dbPoolerCircuitBreakerOpen = false;
+  _useFallbackMode = false;
+  _fallbackModeExpiry = 0;
+}
+
+function _isDbPoolerCircuitBreakerOpen(now = Date.now()) {
+  if (!_dbPoolerCircuitBreakerOpen) {
+    return false;
+  }
+
+  // Attempt to reset circuit breaker after cooldown period
+  if (now - _dbPoolerCircuitBreakerLastFailureTime > DB_POOLER_CIRCUIT_BREAKER_RESET_MS) {
+    _dbPoolerCircuitBreakerOpen = false;
+    _dbPoolerCircuitBreakerFailures = 0;
+    logger.info("Database pooler circuit breaker reset");
+    return false;
+  }
+
+  return true;
+}
+
+function _recordDbPoolerCircuitBreakerFailure(now = Date.now()) {
+  _dbPoolerCircuitBreakerFailures++;
+  _dbPoolerCircuitBreakerLastFailureTime = now;
+
+  if (_dbPoolerCircuitBreakerFailures >= DB_POOLER_CIRCUIT_BREAKER_THRESHOLD) {
+    _dbPoolerCircuitBreakerOpen = true;
+    logger.error(
+      { failures: _dbPoolerCircuitBreakerFailures },
+      "Database pooler circuit breaker opened due to repeated failures"
+    );
+  }
+}
+
+function _recordDbPoolerCircuitBreakerSuccess() {
+  if (_dbPoolerCircuitBreakerFailures > 0) {
+    _dbPoolerCircuitBreakerFailures = Math.max(0, _dbPoolerCircuitBreakerFailures - 1);
+  }
+}
+
+function _enableFallbackMode(durationMs = 300000, now = Date.now()) {
+  _useFallbackMode = true;
+  _fallbackModeExpiry = now + durationMs;
+  logger.warn({ durationMs }, "Database pooler fallback mode enabled");
+}
+
+function _isFallbackModeActive(now = Date.now()) {
+  if (!_useFallbackMode) {
+    return false;
+  }
+
+  if (now > _fallbackModeExpiry) {
+    _useFallbackMode = false;
+    _fallbackModeExpiry = 0;
+    logger.info("Database pooler fallback mode expired");
+    return false;
+  }
+
+  return true;
+}
+
 // ── Query Signature Verification (Issue #759) ──────────────────────────────────
 
 /**
@@ -199,6 +275,7 @@ export function signQuery(text, values = []) {
  * Verify an HMAC signature for a query.
  * Uses constant-time comparison to prevent timing attacks.
  * Enhanced with additional security checks (security audit #896).
+ * Error recovery #895: Graceful handling of verification failures.
  *
  * @param {string} text - SQL query text
  * @param {Array} values - Query parameter values
@@ -206,37 +283,46 @@ export function signQuery(text, values = []) {
  * @returns {boolean} True if the signature is valid or signing is disabled
  */
 export function verifyQuerySignature(text, values, signature) {
-  if (!SIGNING_SECRET) {
-    // Signature verification is disabled
-    return true;
-  }
-
-  if (!signature || typeof signature !== "string") {
-    return false;
-  }
-
-  // Additional security: validate signature format before processing
-  if (!/^[a-f0-9]{64}$/i.test(signature)) {
-    logger.warn({ signature: signature.substring(0, 8) }, "Invalid signature format detected");
-    return false;
-  }
-
-  const expected = signQuery(text, values);
-  if (!expected) {
-    return false;
-  }
-
   try {
-    const expectedBuf = Buffer.from(expected, "hex");
-    const actualBuf = Buffer.from(signature, "hex");
+    if (!SIGNING_SECRET) {
+      // Signature verification is disabled
+      return true;
+    }
 
-    if (expectedBuf.length !== actualBuf.length) {
+    if (!signature || typeof signature !== "string") {
+      logger.warn({ hasSignature: !!signature, signatureType: typeof signature }, "Invalid signature provided");
       return false;
     }
 
-    return timingSafeEqual(expectedBuf, actualBuf);
-  } catch {
-    logger.warn("Signature verification failed with exception");
+    // Additional security: validate signature format before processing
+    if (!/^[a-f0-9]{64}$/i.test(signature)) {
+      logger.warn({ signature: signature.substring(0, 8) }, "Invalid signature format detected");
+      return false;
+    }
+
+    const expected = signQuery(text, values);
+    if (!expected) {
+      logger.warn("Failed to generate expected signature for verification");
+      return false;
+    }
+
+    try {
+      const expectedBuf = Buffer.from(expected, "hex");
+      const actualBuf = Buffer.from(signature, "hex");
+
+      if (expectedBuf.length !== actualBuf.length) {
+        logger.warn({ expectedLength: expectedBuf.length, actualLength: actualBuf.length }, "Signature length mismatch");
+        return false;
+      }
+
+      return timingSafeEqual(expectedBuf, actualBuf);
+    } catch (timingError) {
+      logger.warn({ err: timingError }, "Timing-safe comparison failed");
+      return false;
+    }
+  } catch (err) {
+    // Error recovery #895: Log but don't crash on signature verification errors
+    logger.error({ err }, "Unexpected error during query signature verification");
     return false;
   }
 }
@@ -274,6 +360,7 @@ export function hashQueryResult(result) {
  * - Query signature verification (Issue #759)
  * - Result caching for SELECT queries (Issue #760)
  * - Performance metrics and logging
+ * - Error recovery with circuit breaker and fallback mode (#895)
  *
  * @param {string} text - SQL query text
  * @param {Array} values - Query parameter values
@@ -298,6 +385,30 @@ export async function optimizedQuery(
     signature = null,
   } = {},
 ) {
+  const now = Date.now();
+
+  // Error recovery #895: Check if fallback mode is active
+  if (_isFallbackModeActive(now)) {
+    logger.debug({ label }, "Using fallback mode for query execution");
+    try {
+      const result = await pool.query(text, values);
+      dbPoolerQueryTotal.inc({ label, status: "fallback_success" });
+      return result;
+    } catch (fallbackErr) {
+      dbPoolerQueryTotal.inc({ label, status: "fallback_error" });
+      logger.error({ err: fallbackErr, label }, "Fallback mode query execution failed");
+      throw fallbackErr;
+    }
+  }
+
+  // Error recovery #895: Check circuit breaker
+  if (_isDbPoolerCircuitBreakerOpen(now)) {
+    logger.warn("Database pooler circuit breaker is open, enabling fallback mode");
+    _enableFallbackMode();
+    // Retry with fallback mode
+    return optimizedQuery(text, values, { label, retryAttempts, retryDelayMs, merchantId, useCache, signature });
+  }
+
   // ── Step 1: Rate limiting check (Issue #758) ─────────────────────────────
   const rateLimitResult = queryRateLimiter.checkLimit(merchantId);
   if (!rateLimitResult.allowed) {
@@ -338,10 +449,19 @@ export async function optimizedQuery(
     // Record successful query
     queryRateLimiter.recordQuery(merchantId);
     dbPoolerQueryTotal.inc({ label, status: "success" });
+    _recordDbPoolerCircuitBreakerSuccess();
 
     return result;
   } catch (err) {
     dbPoolerQueryTotal.inc({ label, status: "error" });
+    _recordDbPoolerCircuitBreakerFailure(now);
+
+    // Error recovery #895: Enable fallback mode on repeated failures
+    if (_dbPoolerCircuitBreakerFailures >= DB_POOLER_CIRCUIT_BREAKER_THRESHOLD / 2) {
+      logger.warn({ err, label, failures: _dbPoolerCircuitBreakerFailures }, "Enabling fallback mode due to repeated failures");
+      _enableFallbackMode();
+    }
+
     throw err;
   }
 }
@@ -349,6 +469,7 @@ export async function optimizedQuery(
 /**
  * Execute a write query (INSERT, UPDATE, DELETE) through the optimized pooler.
  * Write queries bypass caching but still enforce rate limiting and signature verification.
+ * Error recovery #895: Enhanced with fallback mode support.
  *
  * @param {string} text - SQL query text
  * @param {Array} values - Query parameter values
@@ -356,15 +477,37 @@ export async function optimizedQuery(
  * @returns {Promise<Object>} Query result
  */
 export async function optimizedWrite(text, values = [], options = {}) {
-  const result = await optimizedQuery(text, values, { ...options, useCache: false });
+  try {
+    const result = await optimizedQuery(text, values, { ...options, useCache: false });
 
-  // Invalidate cache after writes
-  const tableName = extractTableName(text);
-  if (tableName) {
-    invalidateTableCache(tableName);
+    // Invalidate cache after writes
+    const tableName = extractTableName(text);
+    if (tableName) {
+      try {
+        invalidateTableCache(tableName);
+      } catch (cacheErr) {
+        // Error recovery #895: Don't fail the write if cache invalidation fails
+        logger.warn({ err: cacheErr, tableName }, "Failed to invalidate cache after write");
+      }
+    }
+
+    return result;
+  } catch (err) {
+    // Error recovery #895: Attempt fallback mode on write failures
+    if (!_isFallbackModeActive()) {
+      logger.warn({ err, label: options.label }, "Write query failed, attempting fallback mode");
+      _enableFallbackMode();
+      try {
+        const result = await pool.query(text, values);
+        dbPoolerQueryTotal.inc({ label: options.label || "write", status: "fallback_success" });
+        return result;
+      } catch (fallbackErr) {
+        logger.error({ err: fallbackErr }, "Fallback mode write query failed");
+        throw fallbackErr;
+      }
+    }
+    throw err;
   }
-
-  return result;
 }
 
 /**
@@ -394,6 +537,7 @@ function extractTableName(sql) {
 
 /**
  * Get comprehensive pooler statistics.
+ * Error recovery #895: Added circuit breaker and fallback mode status.
  */
 export function getPoolerStats() {
   return {
@@ -401,6 +545,15 @@ export function getPoolerStats() {
     cache: queryCache.getStats(),
     rateLimiter: queryRateLimiter.getStats(),
     signingEnabled: Boolean(SIGNING_SECRET),
+    circuitBreaker: {
+      open: _dbPoolerCircuitBreakerOpen,
+      failures: _dbPoolerCircuitBreakerFailures,
+      lastFailureTime: _dbPoolerCircuitBreakerLastFailureTime,
+    },
+    fallbackMode: {
+      active: _useFallbackMode,
+      expiresAt: _fallbackModeExpiry,
+    },
   };
 }
 
