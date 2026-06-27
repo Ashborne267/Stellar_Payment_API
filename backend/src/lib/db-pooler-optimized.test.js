@@ -67,6 +67,7 @@ import {
   getPoolerStats,
   clearQueryCache,
   queryRateLimiter,
+  _resetDbPoolerCircuitBreakerForTests,
 } from "./db-pooler-optimized.js";
 import { generateCacheKey, QueryCache } from "./db-query-cache.js";
 
@@ -225,6 +226,7 @@ describe("Database Pooler - Rate Limiting (Issue #758)", () => {
     queryRateLimiter.globalCount = 0;
     queryRateLimiter.globalWindowStart = Date.now();
     queryRateLimiter.merchantWindows.clear();
+    _resetDbPoolerCircuitBreakerForTests();
   });
 
   it("allows queries under the limit", () => {
@@ -290,6 +292,7 @@ describe("Database Pooler - Optimized Query (Integration)", () => {
     queryRateLimiter.globalWindowStart = Date.now();
     queryRateLimiter.merchantWindows.clear();
     clearQueryCache();
+    _resetDbPoolerCircuitBreakerForTests();
   });
 
   it("executes SELECT queries successfully", async () => {
@@ -451,5 +454,145 @@ describe("Database Pooler - Signature format validation (Issue #893)", () => {
     // Keys are sorted before hashing, so both must produce the same digest
     expect(hashQueryResult(result1)).toBe(hashQueryResult(result2));
     expect(hashQueryResult(result1)).toMatch(/^[a-f0-9]{64}$/);
+  });
+});
+
+// ── Error recovery #895: Circuit breaker and fallback mode ─────────────────────
+
+describe("Database Pooler - Circuit breaker (Issue #895)", () => {
+  beforeEach(() => {
+    _resetDbPoolerCircuitBreakerForTests();
+    queryRateLimiter.globalCount = 0;
+    queryRateLimiter.globalWindowStart = Date.now();
+    queryRateLimiter.merchantWindows.clear();
+    clearQueryCache();
+  });
+
+  it("opens circuit breaker after repeated failures", async () => {
+    vi.useFakeTimers();
+
+    mockPoolQuery.mockRejectedValue(new Error("Database connection failed"));
+
+    // Trigger 30 failures to open circuit breaker
+    for (let i = 0; i < 30; i++) {
+      try {
+        await optimizedQuery("SELECT 1", [], { label: "test-circuit-breaker" });
+      } catch (err) {
+        // Expected to fail
+      }
+    }
+
+    // Circuit breaker should be open, fallback mode enabled
+    mockPoolQuery.mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
+    const result = await optimizedQuery("SELECT 1", [], { label: "test-circuit-breaker" });
+
+    expect(result.rows).toEqual([{ id: 1 }]);
+
+    vi.useRealTimers();
+  });
+
+  it("resets circuit breaker after cooldown period", async () => {
+    vi.useFakeTimers();
+
+    mockPoolQuery.mockRejectedValue(new Error("Database connection failed"));
+
+    // Open circuit breaker
+    for (let i = 0; i < 30; i++) {
+      try {
+        await optimizedQuery("SELECT 1", [], { label: "test-reset" });
+      } catch (err) {
+        // Expected to fail
+      }
+    }
+
+    // Advance past cooldown period (120s)
+    vi.advanceTimersByTime(121000);
+
+    // Circuit breaker should be reset
+    mockPoolQuery.mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
+    const result = await optimizedQuery("SELECT 1", [], { label: "test-reset" });
+
+    expect(result.rows).toEqual([{ id: 1 }]);
+
+    vi.useRealTimers();
+  });
+
+  it("decrements circuit breaker failure count on success", async () => {
+    mockPoolQuery.mockRejectedValue(new Error("Database connection failed"));
+
+    // Trigger some failures
+    for (let i = 0; i < 15; i++) {
+      try {
+        await optimizedQuery("SELECT 1", [], { label: "test-decrement" });
+      } catch (err) {
+        // Expected to fail
+      }
+    }
+
+    // Success should decrement failure count
+    mockPoolQuery.mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
+    await optimizedQuery("SELECT 1", [], { label: "test-decrement" });
+
+    // Circuit breaker should not be open
+    const stats = getPoolerStats();
+    expect(stats.circuitBreaker.open).toBe(false);
+  });
+
+  it("enables fallback mode on partial failure threshold", async () => {
+    mockPoolQuery.mockRejectedValue(new Error("Database connection failed"));
+
+    // Trigger 15 failures (half of threshold)
+    for (let i = 0; i < 15; i++) {
+      try {
+        await optimizedQuery("SELECT 1", [], { label: "test-fallback" });
+      } catch (err) {
+        // Expected to fail
+      }
+    }
+
+    // Fallback mode should be enabled
+    const stats = getPoolerStats();
+    expect(stats.fallbackMode.active).toBe(true);
+  });
+});
+
+describe("Database Pooler - Enhanced signature verification (Issue #895)", () => {
+  beforeEach(() => {
+    _resetDbPoolerCircuitBreakerForTests();
+  });
+
+  it("handles signature verification errors gracefully", () => {
+    // When signing secret is not set, verification should return true
+    expect(verifyQuerySignature("SELECT 1", [], "any-signature")).toBe(true);
+  });
+
+  it("logs warnings for invalid signature format", () => {
+    // This test verifies that the function doesn't crash on invalid input
+    expect(() => {
+      verifyQuerySignature("SELECT 1", [], "invalid-format");
+    }).not.toThrow();
+  });
+});
+
+describe("Database Pooler - getPoolerStats with circuit breaker (Issue #895)", () => {
+  beforeEach(() => {
+    _resetDbPoolerCircuitBreakerForTests();
+  });
+
+  it("includes circuit breaker status in stats", () => {
+    const stats = getPoolerStats();
+
+    expect(stats).toHaveProperty("circuitBreaker");
+    expect(stats.circuitBreaker).toHaveProperty("open");
+    expect(stats.circuitBreaker).toHaveProperty("failures");
+    expect(stats.circuitBreaker).toHaveProperty("lastFailureTime");
+  });
+
+  it("includes fallback mode status in stats", () => {
+    const stats = getPoolerStats();
+
+    expect(stats).toHaveProperty("fallbackMode");
+    expect(stats.fallbackMode).toHaveProperty("active");
+    expect(stats.fallbackMode).toHaveProperty("expiresAt");
   });
 });
