@@ -31,11 +31,17 @@ async function initializeRateLimiting() {
       // Graceful degradation - continue without rate limiting
       rateLimiters = {
         operations: (req, res, next) => next(),
-        verifications: (req, res, next) => next()
+        verifications: (req, res, next) => next(),
+        burst: (req, res, next) => next(),
       };
     }
   }
   return rateLimiters;
+}
+
+/** Clears the cached rate-limiter instance. Used only in tests. */
+export function _resetRateLimiters() {
+  rateLimiters = null;
 }
 
 // Validation middleware
@@ -78,13 +84,17 @@ const validatePaginationParams = [
 
 /**
  * POST /trustlines/verify/:txHash
- * 
+ *
  * Verify trustline transaction signature with enhanced cryptographic verification
  * Implements Task #595: Add cryptographic signature verification to Trustline Manager
  */
-router.post('/verify/:txHash', 
+router.post('/verify/:txHash',
   authenticateApiKey,
   validateTxHash,
+  async (req, res, next) => {
+    const limits = await initializeRateLimiting();
+    limits.burst(req, res, next);
+  },
   async (req, res, next) => {
     const limits = await initializeRateLimiting();
     limits.verifications(req, res, next);
@@ -155,12 +165,16 @@ router.post('/verify/:txHash',
 
 /**
  * GET /trustlines/config
- * 
+ *
  * Get merchant's trustline configuration with optimized queries
  * Implements Task #596: Optimize SQL queries in Trustline Manager
  */
 router.get('/config',
   authenticateApiKey,
+  async (req, res, next) => {
+    const limits = await initializeRateLimiting();
+    limits.burst(req, res, next);
+  },
   async (req, res, next) => {
     const limits = await initializeRateLimiting();
     limits.operations(req, res, next);
@@ -196,12 +210,16 @@ router.get('/config',
 
 /**
  * GET /trustlines/assets/:assetCode/payments
- * 
+ *
  * Get payments for specific asset with optimized filtering
  * Implements Task #596: Optimize SQL queries in Trustline Manager
  */
 router.get('/assets/:assetCode/payments',
   authenticateApiKey,
+  async (req, res, next) => {
+    const limits = await initializeRateLimiting();
+    limits.burst(req, res, next);
+  },
   async (req, res, next) => {
     const limits = await initializeRateLimiting();
     limits.operations(req, res, next);
@@ -295,12 +313,16 @@ router.get('/assets/:assetCode/payments',
 
 /**
  * GET /trustlines/stats
- * 
+ *
  * Get trustline statistics with optimized aggregation
  * Implements Task #596: Optimize SQL queries in Trustline Manager
  */
 router.get('/stats',
   authenticateApiKey,
+  async (req, res, next) => {
+    const limits = await initializeRateLimiting();
+    limits.burst(req, res, next);
+  },
   async (req, res, next) => {
     const limits = await initializeRateLimiting();
     limits.operations(req, res, next);
@@ -363,12 +385,16 @@ router.get('/stats',
 
 /**
  * POST /trustlines/validate-asset
- * 
+ *
  * Validate asset against merchant's allowed issuers and payment limits
  * Implements enhanced validation with error recovery
  */
 router.post('/validate-asset',
   authenticateApiKey,
+  async (req, res, next) => {
+    const limits = await initializeRateLimiting();
+    limits.burst(req, res, next);
+  },
   async (req, res, next) => {
     const limits = await initializeRateLimiting();
     limits.operations(req, res, next);
