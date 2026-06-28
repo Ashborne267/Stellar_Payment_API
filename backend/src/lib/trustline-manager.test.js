@@ -3,7 +3,7 @@
  * Tests all four optimization tasks: signature verification, rate limiting, error recovery, and SQL optimization
  */
 
-import { vi, describe, test, expect, beforeEach } from 'vitest';
+import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock dependencies first
 const {
@@ -62,7 +62,12 @@ import {
   TrustlineErrorRecovery,
   TrustlineQueryOptimizer,
   TrustlineManager,
-  trustlineManager
+  trustlineManager,
+  TRUSTLINE_RATE_LIMIT_WINDOW_MS,
+  TRUSTLINE_RATE_LIMIT_MAX,
+  TRUSTLINE_VERIFICATION_RATE_LIMIT_MAX,
+  TRUSTLINE_BURST_WINDOW_MS,
+  TRUSTLINE_BURST_MAX,
 } from './trustline-manager.js';
 import { queryWithRetry } from './db.js';
 import { 
@@ -876,9 +881,9 @@ describe('Trustline Manager - Task #596: SQL Query Optimization', () => {
 
       const result = await TrustlineQueryOptimizer.createOptimizedIndexes();
 
-      expect(result).toHaveLength(4); // Four indexes
+      expect(result).toHaveLength(7); // 4 original + 3 added in Task #879
       expect(result.every(r => r.success)).toBe(true);
-      expect(mockQueryWithRetry).toHaveBeenCalledTimes(4);
+      expect(mockQueryWithRetry).toHaveBeenCalledTimes(7);
     });
 
     test('should handle index creation errors gracefully', async () => {
@@ -886,11 +891,14 @@ describe('Trustline Manager - Task #596: SQL Query Optimization', () => {
         .mockResolvedValueOnce({ rows: [] }) // First index succeeds
         .mockRejectedValueOnce(new Error('Index already exists')) // Second fails
         .mockResolvedValueOnce({ rows: [] }) // Third succeeds
-        .mockResolvedValueOnce({ rows: [] }); // Fourth succeeds
+        .mockResolvedValueOnce({ rows: [] }) // Fourth succeeds
+        .mockResolvedValueOnce({ rows: [] }) // Fifth succeeds
+        .mockResolvedValueOnce({ rows: [] }) // Sixth succeeds
+        .mockResolvedValueOnce({ rows: [] }); // Seventh succeeds
 
       const result = await TrustlineQueryOptimizer.createOptimizedIndexes();
 
-      expect(result).toHaveLength(4);
+      expect(result).toHaveLength(7);
       expect(result[0].success).toBe(true);
       expect(result[1].success).toBe(false);
       expect(result[1].error).toContain('Index already exists');
@@ -999,5 +1007,388 @@ describe('Trustline Manager - Singleton Instance', () => {
     expect(trustlineManager.rateLimiter).toBe(TrustlineRateLimiter);
     expect(trustlineManager.errorRecovery).toBe(TrustlineErrorRecovery);
     expect(trustlineManager.queryOptimizer).toBe(TrustlineQueryOptimizer);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rate Limiting – Enhanced Coverage (Task #594)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('TrustlineRateLimiter – Internal Service Bypass', () => {
+  const TOKEN = 'super-secret-internal-token';
+
+  afterEach(() => {
+    delete process.env.INTERNAL_SERVICE_TOKEN;
+  });
+
+  test('returns true when header matches configured token', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = TOKEN;
+    const req = { headers: { 'x-internal-service-token': TOKEN } };
+    expect(TrustlineRateLimiter.isInternalService(req)).toBe(true);
+  });
+
+  test('returns false when header token is wrong', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = TOKEN;
+    const req = { headers: { 'x-internal-service-token': 'wrong' } };
+    expect(TrustlineRateLimiter.isInternalService(req)).toBe(false);
+  });
+
+  test('returns false when header is absent', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = TOKEN;
+    const req = { headers: {} };
+    expect(TrustlineRateLimiter.isInternalService(req)).toBe(false);
+  });
+
+  test('returns false when INTERNAL_SERVICE_TOKEN env var is not set', () => {
+    const req = { headers: { 'x-internal-service-token': TOKEN } };
+    expect(TrustlineRateLimiter.isInternalService(req)).toBe(false);
+  });
+
+  test('returns false for a null/undefined request', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = TOKEN;
+    expect(TrustlineRateLimiter.isInternalService(null)).toBe(false);
+    expect(TrustlineRateLimiter.isInternalService(undefined)).toBe(false);
+  });
+});
+
+describe('TrustlineRateLimiter – Violation Metrics', () => {
+  beforeEach(() => {
+    TrustlineRateLimiter.resetViolationMetrics();
+    vi.clearAllMocks();
+  });
+
+  test('getRateLimitViolationMetrics returns empty object initially', () => {
+    expect(TrustlineRateLimiter.getRateLimitViolationMetrics()).toEqual({});
+  });
+
+  test('recordViolation increments count and sets lastSeen', () => {
+    const key = 'trustline:ops:merchant:abc';
+    TrustlineRateLimiter.recordViolation(key);
+    TrustlineRateLimiter.recordViolation(key);
+
+    const metrics = TrustlineRateLimiter.getRateLimitViolationMetrics();
+    expect(metrics[key].count).toBe(2);
+    expect(metrics[key].lastSeen).toBeTruthy();
+  });
+
+  test('tracks multiple keys independently', () => {
+    TrustlineRateLimiter.recordViolation('key-a');
+    TrustlineRateLimiter.recordViolation('key-b');
+    TrustlineRateLimiter.recordViolation('key-b');
+
+    const metrics = TrustlineRateLimiter.getRateLimitViolationMetrics();
+    expect(metrics['key-a'].count).toBe(1);
+    expect(metrics['key-b'].count).toBe(2);
+  });
+
+  test('resetViolationMetrics clears all data', () => {
+    TrustlineRateLimiter.recordViolation('some-key');
+    TrustlineRateLimiter.resetViolationMetrics();
+    expect(TrustlineRateLimiter.getRateLimitViolationMetrics()).toEqual({});
+  });
+
+  test('getRateLimitViolationMetrics returns a snapshot copy', () => {
+    TrustlineRateLimiter.recordViolation('copy-key');
+    const snapshot = TrustlineRateLimiter.getRateLimitViolationMetrics();
+    // Mutating the snapshot should not affect stored metrics
+    snapshot['copy-key'].count = 9999;
+    expect(TrustlineRateLimiter.getRateLimitViolationMetrics()['copy-key'].count).toBe(1);
+  });
+});
+
+describe('TrustlineRateLimiter – Burst Rate Limiter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    TrustlineRateLimiter.resetViolationMetrics();
+  });
+
+  test('creates burst limiter with correct window and max', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    expect(rateLimitFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        windowMs: TRUSTLINE_BURST_WINDOW_MS,
+        max: TRUSTLINE_BURST_MAX,
+        keyGenerator: TrustlineRateLimiter.getTrustlineOperationKey,
+      }),
+    );
+  });
+
+  test('burst limiter uses the operations key generator', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.keyGenerator).toBe(TrustlineRateLimiter.getTrustlineOperationKey);
+  });
+
+  test('burst limiter skip function allows internal services', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = 'svc-token';
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { headers: { 'x-internal-service-token': 'svc-token' } };
+    expect(config.skip(req)).toBe(true);
+    delete process.env.INTERNAL_SERVICE_TOKEN;
+  });
+
+  test('burst limiter skip function does NOT skip normal clients', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { merchant: { id: 'merchant-1' }, headers: {} };
+    expect(config.skip(req)).toBe(false);
+  });
+
+  test('burst limiter handler records violation and returns 429 response', () => {
+    const rateLimitFactory = mockRateLimit;
+    mockIpKeyGenerator.mockReturnValue('1.2.3.4');
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { ip: '1.2.3.4', headers: {} };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const options = { statusCode: 429, message: { error: 'Burst limit exceeded.' } };
+
+    config.handler(req, res, vi.fn(), options);
+
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect(res.json).toHaveBeenCalledWith(options.message);
+
+    const metrics = TrustlineRateLimiter.getRateLimitViolationMetrics();
+    const key = 'trustline:ops:ip:1.2.3.4';
+    expect(metrics[key]).toBeDefined();
+    expect(metrics[key].count).toBe(1);
+  });
+
+  test('burst limiter has passOnStoreError enabled', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.passOnStoreError).toBe(true);
+  });
+
+  test('burst limit error message includes TRUSTLINE_BURST_LIMIT code', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineBurstRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.message.code).toBe('TRUSTLINE_BURST_LIMIT');
+  });
+});
+
+describe('TrustlineRateLimiter – Enhanced Operation Rate Limiter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    TrustlineRateLimiter.resetViolationMetrics();
+    delete process.env.INTERNAL_SERVICE_TOKEN;
+  });
+
+  test('skip function returns true for internal services', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = 'int-svc';
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { merchant: { metadata: { tier: 'basic' } }, headers: { 'x-internal-service-token': 'int-svc' } };
+    expect(config.skip(req)).toBe(true);
+    delete process.env.INTERNAL_SERVICE_TOKEN;
+  });
+
+  test('skip function returns true for enterprise merchants', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.skip({ merchant: { metadata: { tier: 'enterprise' } }, headers: {} })).toBe(true);
+  });
+
+  test('skip function returns true for premium merchants', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.skip({ merchant: { metadata: { tier: 'premium' } }, headers: {} })).toBe(true);
+  });
+
+  test('skip function returns false for basic-tier merchants', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.skip({ merchant: { metadata: { tier: 'basic' } }, headers: {} })).toBe(false);
+  });
+
+  test('skip function returns false for unauthenticated requests', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.skip({ headers: {} })).toBe(false);
+  });
+
+  test('handler records violation and responds with 429', () => {
+    mockIpKeyGenerator.mockReturnValue('10.0.0.1');
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { ip: '10.0.0.1', headers: {} };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const options = { statusCode: 429, message: { error: 'Too many trustline operations.', code: 'TRUSTLINE_RATE_LIMIT' } };
+
+    config.handler(req, res, vi.fn(), options);
+
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect(res.json).toHaveBeenCalledWith(options.message);
+    const metrics = TrustlineRateLimiter.getRateLimitViolationMetrics();
+    expect(metrics['trustline:ops:ip:10.0.0.1'].count).toBe(1);
+  });
+
+  test('error message includes TRUSTLINE_RATE_LIMIT code', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.message.code).toBe('TRUSTLINE_RATE_LIMIT');
+  });
+
+  test('configures correct window and max values', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineOperationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.windowMs).toBe(TRUSTLINE_RATE_LIMIT_WINDOW_MS);
+    expect(config.max).toBe(TRUSTLINE_RATE_LIMIT_MAX);
+  });
+});
+
+describe('TrustlineRateLimiter – Enhanced Verification Rate Limiter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    TrustlineRateLimiter.resetViolationMetrics();
+    delete process.env.INTERNAL_SERVICE_TOKEN;
+  });
+
+  test('configures higher max than operation limiter', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineVerificationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.max).toBe(TRUSTLINE_VERIFICATION_RATE_LIMIT_MAX);
+    expect(config.max).toBeGreaterThan(TRUSTLINE_RATE_LIMIT_MAX);
+  });
+
+  test('skip function allows internal services', () => {
+    process.env.INTERNAL_SERVICE_TOKEN = 'svc';
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineVerificationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { headers: { 'x-internal-service-token': 'svc' } };
+    expect(config.skip(req)).toBe(true);
+    delete process.env.INTERNAL_SERVICE_TOKEN;
+  });
+
+  test('handler records violation and responds with 429', () => {
+    mockIpKeyGenerator.mockReturnValue('5.5.5.5');
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineVerificationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    const req = { ip: '5.5.5.5', headers: {} };
+    const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+    const options = { statusCode: 429, message: { error: 'Too many verification requests.' } };
+
+    config.handler(req, res, vi.fn(), options);
+
+    expect(res.status).toHaveBeenCalledWith(429);
+    const metrics = TrustlineRateLimiter.getRateLimitViolationMetrics();
+    expect(metrics['trustline:verify:ip:5.5.5.5'].count).toBe(1);
+  });
+
+  test('error message includes TRUSTLINE_VERIFY_RATE_LIMIT code', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineVerificationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.message.code).toBe('TRUSTLINE_VERIFY_RATE_LIMIT');
+  });
+
+  test('uses verification key generator (not operations key)', () => {
+    const rateLimitFactory = mockRateLimit;
+    TrustlineRateLimiter.createTrustlineVerificationRateLimit({ store: {}, rateLimitFactory });
+
+    const config = rateLimitFactory.mock.calls[0][0];
+    expect(config.keyGenerator).toBe(TrustlineRateLimiter.getTrustlineVerificationKey);
+  });
+});
+
+describe('TrustlineRateLimiter – Key Generation Edge Cases', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  test('operation key prefers merchantId over API key and IP', () => {
+    const req = {
+      merchant: { id: 'merch-xyz' },
+      headers: { 'x-api-key': 'somekey' },
+      ip: '9.9.9.9',
+    };
+    const key = TrustlineRateLimiter.getTrustlineOperationKey(req);
+    expect(key).toBe('trustline:ops:merchant:merch-xyz');
+  });
+
+  test('operation key prefers hashed API key over IP when no merchant', () => {
+    mockIpKeyGenerator.mockReturnValue('2.2.2.2');
+    const req = { headers: { 'x-api-key': 'testkey' }, ip: '2.2.2.2' };
+    const key = TrustlineRateLimiter.getTrustlineOperationKey(req);
+    expect(key).toMatch(/^trustline:ops:api:[a-f0-9]{16}$/);
+  });
+
+  test('operation key falls back to IP when no merchant or API key', () => {
+    mockIpKeyGenerator.mockReturnValue('3.3.3.3');
+    const req = { ip: '3.3.3.3', headers: {} };
+    const key = TrustlineRateLimiter.getTrustlineOperationKey(req);
+    expect(key).toBe('trustline:ops:ip:3.3.3.3');
+  });
+
+  test('operation key uses socket remote address as fallback for IP', () => {
+    mockIpKeyGenerator.mockReturnValue('7.7.7.7');
+    const req = { socket: { remoteAddress: '7.7.7.7' }, headers: {} };
+    const key = TrustlineRateLimiter.getTrustlineOperationKey(req);
+    expect(key).toBe('trustline:ops:ip:7.7.7.7');
+  });
+
+  test('operation key uses unknown-ip when no address available', () => {
+    mockIpKeyGenerator.mockReturnValue('unknown-ip');
+    const key = TrustlineRateLimiter.getTrustlineOperationKey({});
+    expect(key).toBe('trustline:ops:ip:unknown-ip');
+  });
+
+  test('verification key uses merchantId when present', () => {
+    const req = { merchant: { id: 'verif-m' } };
+    const key = TrustlineRateLimiter.getTrustlineVerificationKey(req);
+    expect(key).toBe('trustline:verify:merchant:verif-m');
+  });
+
+  test('verification key falls back to IP', () => {
+    mockIpKeyGenerator.mockReturnValue('8.8.8.8');
+    const req = { ip: '8.8.8.8' };
+    const key = TrustlineRateLimiter.getTrustlineVerificationKey(req);
+    expect(key).toBe('trustline:verify:ip:8.8.8.8');
+  });
+
+  test('hashed API keys are truncated to 16 hex characters', () => {
+    mockIpKeyGenerator.mockReturnValue('0.0.0.0');
+    const req = { headers: { 'x-api-key': 'a-very-long-api-key-value' }, ip: '0.0.0.0' };
+    const key = TrustlineRateLimiter.getTrustlineOperationKey(req);
+    const hashPart = key.replace('trustline:ops:api:', '');
+    expect(hashPart).toHaveLength(16);
+    expect(hashPart).toMatch(/^[a-f0-9]+$/);
   });
 });

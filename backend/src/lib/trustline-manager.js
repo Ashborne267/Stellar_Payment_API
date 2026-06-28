@@ -27,6 +27,8 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 export const TRUSTLINE_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 export const TRUSTLINE_RATE_LIMIT_MAX = 20; // 20 operations per window
 export const TRUSTLINE_VERIFICATION_RATE_LIMIT_MAX = 50; // 50 verifications per window
+export const TRUSTLINE_BURST_WINDOW_MS = 10 * 1000; // 10 seconds burst window
+export const TRUSTLINE_BURST_MAX = 5; // 5 requests per burst window
 const TRUSTLINE_STATS_TIMEFRAMES = new Set([
   "1 hour",
   "24 hours",
@@ -44,6 +46,12 @@ const CIRCUIT_BREAKER_HALF_OPEN_PROBE_MS = 5 * 1000; // time before allowing pro
 const OPERATION_TIMEOUT_MS = 15 * 1000; // default per-operation timeout
 const DLQ_MAX_SIZE = 100; // maximum dead-letter queue entries
 const ERROR_RECOVERY_METRICS_WINDOW_MS = 60 * 1000; // 1 minute window for recovery metrics
+
+/**
+ * Per-key rate limit violation tracking.
+ * Provides metrics for security monitoring and alerting on abusive actors.
+ */
+const rateLimitViolations = new Map();
 
 /**
  * Per-context circuit breaker states.
@@ -299,10 +307,14 @@ export class TrustlineSignatureVerifier {
  * - Per-merchant trustline operation limits
  * - Per-IP verification limits
  * - Adaptive rate limiting based on account type
+ * - Burst protection (secondary tight window)
+ * - Internal service bypass via trusted header
+ * - Violation metrics for security monitoring
  */
 export class TrustlineRateLimiter {
   /**
-   * Generate rate limit key for trustline operations
+   * Generate rate limit key for trustline operations.
+   * Priority: merchant ID > hashed API key > IP address.
    */
   static getTrustlineOperationKey(req) {
     const merchantId = req?.merchant?.id;
@@ -325,7 +337,8 @@ export class TrustlineRateLimiter {
   }
 
   /**
-   * Generate rate limit key for trustline verifications
+   * Generate rate limit key for trustline verifications.
+   * Priority: merchant ID > IP address.
    */
   static getTrustlineVerificationKey(req) {
     const merchantId = req?.merchant?.id;
@@ -338,7 +351,88 @@ export class TrustlineRateLimiter {
   }
 
   /**
-   * Create rate limiter for trustline operations
+   * Check whether the request comes from a trusted internal service.
+   * Internal services present a shared secret via x-internal-service-token.
+   * The server-side secret is configured via the INTERNAL_SERVICE_TOKEN env var.
+   */
+  static isInternalService(req) {
+    const internalToken = req?.headers?.["x-internal-service-token"];
+    const configuredToken = process.env.INTERNAL_SERVICE_TOKEN;
+    return Boolean(
+      configuredToken && internalToken && internalToken === configuredToken,
+    );
+  }
+
+  /**
+   * Record a rate limit violation for a given key.
+   * Call this from rate limiter handlers to build abuse metrics.
+   */
+  static recordViolation(key) {
+    const current = rateLimitViolations.get(key) || {
+      count: 0,
+      lastSeen: null,
+    };
+    rateLimitViolations.set(key, {
+      count: current.count + 1,
+      lastSeen: new Date().toISOString(),
+    });
+  }
+
+  /**
+   * Return a snapshot of all recorded rate limit violations.
+   * Useful for security dashboards and alerting pipelines.
+   */
+  static getRateLimitViolationMetrics() {
+    const snapshot = {};
+    for (const [key, data] of rateLimitViolations.entries()) {
+      snapshot[key] = { ...data };
+    }
+    return snapshot;
+  }
+
+  /**
+   * Clear all recorded violation metrics.
+   * Used in tests and administrative reset endpoints.
+   */
+  static resetViolationMetrics() {
+    rateLimitViolations.clear();
+  }
+
+  /**
+   * Create burst protection rate limiter.
+   * Enforces a tight secondary window (default 5 req / 10 s) to stop
+   * rapid-fire bursts that stay under the primary per-window quota.
+   */
+  static createTrustlineBurstRateLimit({
+    store,
+    rateLimitFactory = rateLimit,
+  } = {}) {
+    return rateLimitFactory({
+      windowMs: TRUSTLINE_BURST_WINDOW_MS,
+      max: TRUSTLINE_BURST_MAX,
+      message: {
+        error: "Burst limit exceeded. Slow down your trustline requests.",
+        code: "TRUSTLINE_BURST_LIMIT",
+        retryAfter: Math.ceil(TRUSTLINE_BURST_WINDOW_MS / 1000),
+      },
+      standardHeaders: true,
+      legacyHeaders: false,
+      validate: { ip: false },
+      keyGenerator: this.getTrustlineOperationKey,
+      handler: (req, res, _next, options) => {
+        const key = this.getTrustlineOperationKey(req);
+        this.recordViolation(key);
+        res.status(options.statusCode).json(options.message);
+      },
+      store,
+      passOnStoreError: true,
+      skip: (req) => this.isInternalService(req),
+    });
+  }
+
+  /**
+   * Create rate limiter for trustline operations.
+   * Skips enterprise/premium merchants and trusted internal services.
    */
   static createTrustlineOperationRateLimit({
     store,
@@ -350,17 +444,23 @@ export class TrustlineRateLimiter {
       message: {
         error:
           "Too many trustline operations. Please wait before creating more trustlines.",
+        code: "TRUSTLINE_RATE_LIMIT",
         retryAfter: Math.ceil(TRUSTLINE_RATE_LIMIT_WINDOW_MS / 1000),
       },
       standardHeaders: true,
       legacyHeaders: false,
       validate: { ip: false },
       keyGenerator: this.getTrustlineOperationKey,
+      handler: (req, res, _next, options) => {
+        const key = this.getTrustlineOperationKey(req);
+        this.recordViolation(key);
+        res.status(options.statusCode).json(options.message);
+      },
       requestWasSuccessful: (_req, res) => res.statusCode < 400,
       store,
       passOnStoreError: true,
-      // Skip rate limiting for high-tier merchants
       skip: (req) => {
+        if (this.isInternalService(req)) return true;
         const merchantTier = req?.merchant?.metadata?.tier;
         return merchantTier === "enterprise" || merchantTier === "premium";
       },
@@ -368,7 +468,9 @@ export class TrustlineRateLimiter {
   }
 
   /**
-   * Create rate limiter for trustline verifications
+   * Create rate limiter for trustline verifications.
+   * Higher quota than operations since verification is read-only.
+   * Skips trusted internal services.
    */
   static createTrustlineVerificationRateLimit({
     store,
@@ -379,15 +481,22 @@ export class TrustlineRateLimiter {
       max: TRUSTLINE_VERIFICATION_RATE_LIMIT_MAX,
       message: {
         error: "Too many trustline verification requests. Please slow down.",
+        code: "TRUSTLINE_VERIFY_RATE_LIMIT",
         retryAfter: Math.ceil(TRUSTLINE_RATE_LIMIT_WINDOW_MS / 1000),
       },
       standardHeaders: true,
       legacyHeaders: false,
       validate: { ip: false },
       keyGenerator: this.getTrustlineVerificationKey,
+      handler: (req, res, _next, options) => {
+        const key = this.getTrustlineVerificationKey(req);
+        this.recordViolation(key);
+        res.status(options.statusCode).json(options.message);
+      },
       requestWasSuccessful: (_req, res) => res.statusCode < 400,
       store,
       passOnStoreError: true,
+      skip: (req) => this.isInternalService(req),
     });
   }
 }
@@ -1405,5 +1514,6 @@ export const createTrustlineRateLimits = (redisClient) => {
     verifications: TrustlineRateLimiter.createTrustlineVerificationRateLimit({
       store,
     }),
+    burst: TrustlineRateLimiter.createTrustlineBurstRateLimit({ store }),
   };
 };
