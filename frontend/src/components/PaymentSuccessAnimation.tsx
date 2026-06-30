@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useReducer } from "react";
 import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
 import confetti from "canvas-confetti";
 import { useTranslations } from "next-intl";
@@ -71,6 +71,55 @@ const checkVariantsReduced: Variants = {
   visible: { opacity: 1, transition: { duration: 0.2 } },
 };
 
+interface AnimationState {
+  isDismissing: boolean;
+  announcementText: string;
+}
+
+type AnimationAction =
+  | { type: "RESET" }
+  | { type: "SET_ANNOUNCEMENT"; payload: string }
+  | { type: "START_DISMISS"; payload: string }
+  | { type: "DISMISS_ERROR"; payload: string }
+  | { type: "DISMISS_SUCCESS" };
+
+const initialState: AnimationState = {
+  isDismissing: false,
+  announcementText: "",
+};
+
+function animationReducer(state: AnimationState, action: AnimationAction): AnimationState {
+  switch (action.type) {
+    case "RESET":
+      return {
+        isDismissing: false,
+        announcementText: "",
+      };
+    case "SET_ANNOUNCEMENT":
+      return {
+        ...state,
+        announcementText: action.payload,
+      };
+    case "START_DISMISS":
+      return {
+        isDismissing: true,
+        announcementText: action.payload,
+      };
+    case "DISMISS_ERROR":
+      return {
+        isDismissing: false,
+        announcementText: action.payload,
+      };
+    case "DISMISS_SUCCESS":
+      return {
+        ...state,
+        isDismissing: false,
+      };
+    default:
+      return state;
+  }
+}
+
 export const PaymentSuccessAnimation: React.FC<PaymentSuccessAnimationProps> = ({
   show,
   onComplete,
@@ -88,16 +137,13 @@ export const PaymentSuccessAnimation: React.FC<PaymentSuccessAnimationProps> = (
   const containerRef = useRef<HTMLDivElement>(null);
   const prevIsOptimisticRef = useRef(isOptimistic);
 
-  // Optimistic dismiss state (#981)
-  const [isDismissing, setIsDismissing] = useState(false);
-  // Dynamic live-region text for state transitions (#980, #981)
-  const [announcementText, setAnnouncementText] = useState("");
+  const [state, dispatch] = useReducer(animationReducer, initialState);
+  const { isDismissing, announcementText } = state;
 
   // Reset dismiss state when dialog closes
   useEffect(() => {
     if (!show) {
-      setIsDismissing(false);
-      setAnnouncementText("");
+      dispatch({ type: "RESET" });
     }
   }, [show]);
 
@@ -105,9 +151,10 @@ export const PaymentSuccessAnimation: React.FC<PaymentSuccessAnimationProps> = (
   useEffect(() => {
     if (!show) return;
     if (prevIsOptimisticRef.current === true && !isOptimistic) {
-      setAnnouncementText(
-        t("payment.networkConfirmed") || "Payment confirmed on the Stellar network."
-      );
+      dispatch({
+        type: "SET_ANNOUNCEMENT",
+        payload: t("payment.networkConfirmed") || "Payment confirmed on the Stellar network.",
+      });
     }
     prevIsOptimisticRef.current = isOptimistic;
   }, [isOptimistic, show, t]);
@@ -115,8 +162,10 @@ export const PaymentSuccessAnimation: React.FC<PaymentSuccessAnimationProps> = (
   // Optimistic dismiss handler — UI responds immediately, rolls back on error (#981)
   const handleDismiss = useCallback(async () => {
     if (isDismissing) return;
-    setIsDismissing(true);
-    setAnnouncementText(t("payment.dismissing") || "Processing…");
+    dispatch({
+      type: "START_DISMISS",
+      payload: t("payment.dismissing") || "Processing…",
+    });
     try {
       await onComplete?.();
     } catch (err) {
@@ -124,8 +173,7 @@ export const PaymentSuccessAnimation: React.FC<PaymentSuccessAnimationProps> = (
         err instanceof Error
           ? err.message
           : t("common.error") || "Something went wrong. Please try again.";
-      setIsDismissing(false);
-      setAnnouncementText(msg);
+      dispatch({ type: "DISMISS_ERROR", payload: msg });
     }
   }, [isDismissing, onComplete, t]);
 
