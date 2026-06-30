@@ -185,9 +185,6 @@ export default function PaymentPage() {
   useEffect(() => {
     if (payment && (payment.status === "confirmed" || payment.status === "completed")) {
       setIsOptimisticSuccess(true);
-      // Auto-hide the big celebration after 4 seconds to show the receipt/details
-      const timer = setTimeout(() => setIsOptimisticSuccess(false), 4000);
-      return () => clearTimeout(timer);
     }
   }, [payment]);
 
