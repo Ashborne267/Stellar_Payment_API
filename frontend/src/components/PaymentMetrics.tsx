@@ -37,11 +37,7 @@ interface VolumeResponse {
 }
 
 interface MetricsResponse {
-  data: Array<{
-    date: string;
-    volume: number;
-    count: number;
-  }>;
+  data: Array<{ date: string; volume: number; count: number }>;
   total_volume: number;
   total_payments: number;
   confirmed_count: number;
@@ -601,6 +597,7 @@ export default function PaymentMetrics({
           )}
         </AnimatePresence>
 
+        {/* Asset toggles */}
         {assets.length > 0 && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -657,9 +654,7 @@ export default function PaymentMetrics({
         {densityData.length > 0 && <DensityGrid data={densityData} />}
 
         {assets.length === 0 ? (
-          <p className="py-12 text-center text-sm text-slate-500">
-            {t("noPayments")}
-          </p>
+          <p className="py-12 text-center text-sm text-slate-500">{t("noPayments")}</p>
         ) : (
           <>
             <table id={chartTableId} className="sr-only">
