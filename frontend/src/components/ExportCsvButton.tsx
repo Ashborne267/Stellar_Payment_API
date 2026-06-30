@@ -10,15 +10,15 @@ import { exportTransactionsToCsv, Transaction } from "@/lib/exportCsv";
 
 interface ExportCsvButtonProps {
   transactions: Transaction[];
-  filename?:    string;
-  disabled?:    boolean;
-  className?:   string;
+  filename?: string;
+  disabled?: boolean;
+  className?: string;
 }
 
 export default function ExportCsvButton({
   transactions = [],
   filename,
-  disabled  = false,
+  disabled = false,
   className = "",
 }: ExportCsvButtonProps): React.ReactElement {
   const [exporting, setExporting] = useState<boolean>(false);
@@ -63,7 +63,9 @@ export default function ExportCsvButton({
           >
             <circle
               className="opacity-25"
-              cx="12" cy="12" r="10"
+              cx="12"
+              cy="12"
+              r="10"
               stroke="currentColor"
               strokeWidth="4"
             />

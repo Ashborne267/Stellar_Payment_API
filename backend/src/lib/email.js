@@ -1,13 +1,13 @@
 import { Resend } from "resend";
 
 /** @type {Resend | null} */
-let resend = null;
+let resendClient = null;
 
 function getClient() {
-  if (!resend) {
-    resend = new Resend(process.env.RESEND_API_KEY);
+  if (!resendClient) {
+    resendClient = new Resend(process.env.RESEND_API_KEY);
   }
-  return resend;
+  return resendClient;
 }
 
 const FROM_ADDRESS =

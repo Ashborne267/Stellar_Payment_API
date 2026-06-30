@@ -1,6 +1,7 @@
 import request from "supertest";
 import { createApp } from "../../src/app.js";
 import { closePool } from "../../src/lib/db.js";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 
 /**
  * Mock for the Redis client required by createApp().
@@ -8,9 +9,36 @@ import { closePool } from "../../src/lib/db.js";
  * methods that app.js calls during initialisation.
  */
 const mockRedisClient = {
-  ping: jest.fn().mockResolvedValue("PONG"),
-  on: jest.fn(),
+  ping: vi.fn().mockResolvedValue("PONG"),
+  on: vi.fn(),
+  sendCommand: vi.fn().mockResolvedValue("mocked_hash"),
 };
+
+vi.mock("../../src/lib/stellar.js", () => ({
+  findMatchingPayment: vi.fn(),
+  findAnyRecentPayment: vi.fn(),
+  findStrictReceivePaths: vi.fn(),
+  getNetworkFeeStats: vi.fn(),
+  isHorizonReachable: vi.fn(async () => true),
+  isValidAssetCode: vi.fn(() => true),
+  isValidStellarAccountId: vi.fn(() => true),
+  isValidStellarPublicKey: vi.fn(() => true),
+  validateMemo: vi.fn(() => ({ valid: true })),
+  verifyTransactionSignature: vi.fn(),
+  withHorizonRetry: vi.fn(),
+}));
+
+vi.mock("../../src/lib/supabase.js", () => {
+  return {
+    supabase: {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          limit: vi.fn(() => Promise.resolve({ data: [], error: null })),
+        })),
+      })),
+    },
+  };
+});
 
 describe("Health Check", () => {
   let app;
@@ -21,7 +49,7 @@ describe("Health Check", () => {
   });
 
   afterAll(async () => {
-    if (io) io.close();
+    // io is not attached to a listening server in tests, closing it throws Unhandled Rejection
     await closePool();
   });
 

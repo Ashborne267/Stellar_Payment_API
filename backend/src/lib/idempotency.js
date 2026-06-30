@@ -1,87 +1,97 @@
-/**
- * In-memory idempotency cache with TTL.
- * 
- * For production deployments with multiple instances, consider:
- * - Redis: Fast, persistent, cluster-ready
- * - Supabase: Use a dedicated idempotency_keys table with cleanup jobs
- * 
- * Current implementation:
- * - Stored in memory with automatic cleanup after TTL
- * - Single-instance friendly
- * - Does NOT persist across server restarts
- */
-
-const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const cache = new Map();
+import crypto from "node:crypto";
+import { getRedisClient } from "./redis.js";
 
 /**
- * Check if an idempotency key exists and is still valid.
- * @param {string} key - The idempotency key
- * @returns {object|null} - Cached response or null if not found
+ * TTL for idempotency cache entries in seconds.
  */
-export function getIdempotencyResponse(key) {
-  if (!cache.has(key)) return null;
-
-  const entry = cache.get(key);
-  const now = Date.now();
-
-  // Check if entry has expired
-  if (now > entry.expiresAt) {
-    cache.delete(key);
-    return null;
-  }
-
-  return entry.response;
-}
-
-/**
- * Store a response against an idempotency key.
- * @param {string} key - The idempotency key
- * @param {object} response - The response object to cache
- */
-export function setIdempotencyResponse(key, response) {
-  cache.set(key, {
-    response,
-    expiresAt: Date.now() + IDEMPOTENCY_TTL_MS,
-  });
-}
+const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 
 /**
  * Idempotency middleware that checks and enforces idempotent requests.
- * Returns cached response if key exists, otherwise calls next.
+ * Tracks the key tied to the payload hash and response.
+ * Returns a cached 201 response if the key matches a previous request.
+ * Stores cached state in Redis for 24h.
  */
-export function idempotencyMiddleware(req, res, next) {
+export async function idempotencyMiddleware(req, res, next) {
+  // Only process POST requests as per requirements
+  if (req.method !== "POST") {
+    return next();
+  }
+
   const idempotencyKey = req.get("Idempotency-Key");
 
-  if (!idempotencyKey) {
-    // Idempotency-Key is optional, but strongly recommended
+  if (idempotencyKey === undefined) {
+    // Idempotency-Key is optional but allows safe retries when present
     return next();
   }
 
   if (typeof idempotencyKey !== "string" || idempotencyKey.trim().length === 0) {
     return res.status(400).json({
-      error: "Idempotency-Key header must be a non-empty string"
+      error: "Idempotency-Key header must be a non-empty string",
     });
   }
 
-  // Check cache
-  const cachedResponse = getIdempotencyResponse(idempotencyKey);
-  if (cachedResponse) {
-    // Return cached response with 200 (not 201) to indicate it's a cached duplicate
-    return res.status(200).json(cachedResponse);
+
+  // Ensure merchant context is available (assumes requireApiKeyAuth was run)
+  const merchantId = req.merchant?.id;
+  if (!merchantId) {
+    // If authentication hasn't run or failed to set merchant, we can't safely track idempotency per merchant
+    return res.status(401).json({ error: "Merchant authentication required" });
   }
 
-  // Store original json method
-  const originalJson = res.json.bind(res);
+  const redisClient = getRedisClient();
+  const redisKey = `idempotency:${merchantId}:${idempotencyKey}`;
+  
+  // Calculate hash of payload to ensure consistency
+  const payloadHash = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(req.body || {}))
+    .digest("hex");
 
-  // Override json to cache responses
-  res.json = function (data) {
-    // Only cache successful responses (2xx status codes)
-    if (res.statusCode >= 200 && res.statusCode < 300) {
-      setIdempotencyResponse(idempotencyKey, data);
+  try {
+    const cachedValue = await redisClient.get(redisKey);
+
+    if (cachedValue) {
+      const { hash, response } = JSON.parse(cachedValue);
+
+      // Verify if the payload matches the original request
+      if (hash !== payloadHash) {
+        return res.status(400).json({
+          error: "Idempotency-Key already used with a different request payload"
+        });
+      }
+
+      // Return cached response with 201 status code as requested
+      return res.status(201).json(response);
     }
-    return originalJson(data);
-  };
 
-  next();
+    // Capture the original json method to intercept the response
+    const originalJson = res.json.bind(res);
+
+    res.json = function (data) {
+      // Only cache successful creation-like responses (2xx)
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        redisClient
+          .set(
+            redisKey,
+            JSON.stringify({
+              hash: payloadHash,
+              response: data,
+            }),
+            { EX: IDEMPOTENCY_TTL_SECONDS }
+          )
+          .catch((err) => {
+            console.error("Failed to cache idempotency response:", err.message);
+          });
+      }
+      return originalJson(data);
+    };
+
+    next();
+  } catch (err) {
+    // If Redis is unavailable, log error and proceed without idempotency (fail-safe)
+    console.error("Idempotency check failed (Redis error):", err.message);
+    next();
+  }
 }
+

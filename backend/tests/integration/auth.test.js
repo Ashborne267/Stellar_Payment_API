@@ -1,25 +1,34 @@
 import request from "supertest";
-import { createApp } from "../../src/app.js";
-import { closePool } from "../../src/lib/db.js";
+process.env.SUPABASE_URL ||= "https://example.supabase.co";
+process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
+process.env.DATABASE_URL ||= "postgresql://postgres:postgres@127.0.0.1:5432/postgres";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 
 /**
  * Mock for the Redis client required by createApp().
  */
 const mockRedisClient = {
-  ping: jest.fn().mockResolvedValue("PONG"),
-  on: jest.fn(),
+  ping: vi.fn().mockResolvedValue("PONG"),
+  on: vi.fn(),
+  sendCommand: vi.fn().mockResolvedValue("mocked_hash"),
 };
 
 describe("Unauthorized Access", () => {
   let app;
   let io;
+  let closePool;
 
   beforeAll(async () => {
+    const [{ createApp }, { closePool: importedClosePool }] = await Promise.all([
+      import("../../src/app.js"),
+      import("../../src/lib/db.js"),
+    ]);
+    closePool = importedClosePool;
     ({ app, io } = await createApp({ redisClient: mockRedisClient }));
   });
 
   afterAll(async () => {
-    if (io) io.close();
+    // io is not attached to a listening server in tests, closing it throws Unhandled Rejection
     await closePool();
   });
 

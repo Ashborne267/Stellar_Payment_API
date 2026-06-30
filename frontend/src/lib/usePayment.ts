@@ -8,6 +8,8 @@ interface PaymentParams {
   amount: string;
   assetCode: string;
   assetIssuer: string | null;
+  memo?: string | null;
+  memoType?: string | null;
 }
 
 interface PathPaymentParams {
@@ -19,6 +21,8 @@ interface PathPaymentParams {
   sendAssetCode: string;
   sendAssetIssuer: string | null;
   path: Array<{ asset_code: string; asset_issuer: string | null }>;
+  memo?: string | null;
+  memoType?: string | null;
 }
 
 interface UsePaymentReturn {
@@ -69,6 +73,8 @@ export function usePayment(provider: WalletProvider | null): UsePaymentReturn {
           amount: params.amount,
           assetCode: params.assetCode,
           assetIssuer: params.assetIssuer,
+          memo: params.memo,
+          memoType: params.memoType,
           horizonUrl: networkUrl,
           networkPassphrase,
         });
@@ -133,6 +139,8 @@ export function usePayment(provider: WalletProvider | null): UsePaymentReturn {
           destAssetCode: params.destAssetCode,
           destAssetIssuer: params.destAssetIssuer,
           path: params.path,
+          memo: params.memo,
+          memoType: params.memoType,
           horizonUrl: networkUrl,
           networkPassphrase,
         });

@@ -1,20 +1,20 @@
 "use client";
 
 import { useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import {
+  localeCookieMaxAge,
   localeCookieName,
+  type AppLocale,
   locales,
   resolveAppLocale,
-  type AppLocale,
 } from "@/i18n/config";
+import { usePathname, useRouter } from "@/i18n/navigation";
 
 interface LocaleSwitcherProps {
   className?: string;
 }
-
-const COOKIE_TTL_SECONDS = 60 * 60 * 24 * 365;
 
 export default function LocaleSwitcher({
   className = "",
@@ -22,23 +22,31 @@ export default function LocaleSwitcher({
   const t = useTranslations("localeSwitcher");
   const locale = resolveAppLocale(useLocale());
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
 
   const handleChange = (nextLocale: AppLocale) => {
     if (nextLocale === locale) return;
 
-    document.cookie = `${localeCookieName}=${nextLocale}; path=/; max-age=${COOKIE_TTL_SECONDS}; samesite=lax`;
+    document.cookie = `${localeCookieName}=${nextLocale}; path=/; max-age=${localeCookieMaxAge}; samesite=lax`;
+
+    const query = searchParams.toString();
+    const href = query ? `${pathname}?${query}` : pathname;
 
     startTransition(() => {
-      router.refresh();
+      router.replace(href, {
+        locale: nextLocale,
+        scroll: false,
+      });
     });
   };
 
   return (
     <label
-      className={`inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs text-slate-300 ${className}`}
+      className={`inline-flex items-center gap-2 rounded-xl border border-[#1F1F1F] bg-black px-3 py-2 text-xs text-[#A0A0A0] transition-all hover:border-white/20 ${className}`}
     >
-      <span className="font-mono uppercase tracking-[0.2em] text-slate-400">
+      <span className="font-black uppercase tracking-[0.2em] text-[#A0A0A0]">
         {t("label")}
       </span>
       <select
@@ -49,7 +57,7 @@ export default function LocaleSwitcher({
         className="bg-transparent text-sm text-white outline-none"
       >
         {locales.map((option) => (
-          <option key={option} value={option} className="bg-slate-950 text-white">
+          <option key={option} value={option} className="bg-black text-white">
             {t(`options.${option}`)}
           </option>
         ))}

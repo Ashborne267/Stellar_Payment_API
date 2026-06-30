@@ -1,32 +1,40 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, useRef, useReducer, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
+import confetti from "canvas-confetti";
 import CopyButton from "./CopyButton";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
+import IntegrationCodeSnippets from "./IntegrationCodeSnippets";
 import Link from "next/link";
+import { InfoTooltip } from "./InfoTooltip";
+import CheckoutQrModal from "./CheckoutQrModal";
 import {
   useHydrateMerchantStore,
   useMerchantApiKey,
   useMerchantHydrated,
   useMerchantTrustedAddresses,
 } from "@/lib/merchant-store";
+import {
+  createPaymentFlowReducer,
+  initialCreatePaymentFlowState,
+  type CreatedPayment,
+} from "@/lib/create-payment-flow";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
-// Stellar testnet USDC issuer — override via NEXT_PUBLIC_USDC_ISSUER for mainnet
 const USDC_ISSUER =
   process.env.NEXT_PUBLIC_USDC_ISSUER ??
   "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
-/** Basic Stellar public-key format check (G + 55 base-32 chars = 56 total). */
 const STELLAR_ADDRESS_RE = /^G[A-Z2-7]{55}$/;
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
 const DEFAULT_BRANDING = {
-  primary_color: "#5ef2c0",
-  secondary_color: "#b8ffe2",
-  background_color: "#050608",
+  primary_color: "#00F5D4",
+  secondary_color: "#6C5CE7",
+  background_color: "#0B0F1A",
 };
 
 function normalizeHexInput(value: string) {
@@ -34,183 +42,228 @@ function normalizeHexInput(value: string) {
   return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
 }
 
-interface CreatedPayment {
-  payment_id: string;
-  payment_link: string;
-  status: string;
+// ─── Animation variants ───────────────────────────────────────────────────────
+
+/** The form slides out upward and fades as the success card comes in. */
+const formVariants: Variants = {
+  visible: { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" },
+  exit: {
+    opacity: 0,
+    y: -24,
+    scale: 0.97,
+    filter: "blur(4px)",
+    transition: {
+      duration: 0.35,
+      ease: [0.4, 0, 0.2, 1] as [number, number, number, number],
+    },
+  },
+};
+
+/** Success card enters from below with a spring bounce. */
+const successVariants: Variants = {
+  hidden: { opacity: 0, y: 40, scale: 0.95 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: {
+      type: "spring",
+      stiffness: 260,
+      damping: 22,
+      staggerChildren: 0.07,
+      delayChildren: 0.1,
+    },
+  },
+  exit: {
+    opacity: 0,
+    y: -16,
+    transition: { duration: 0.25, ease: "easeIn" },
+  },
+};
+
+/** Each child inside the success card staggers in. */
+const childVariants: Variants = {
+  hidden: { opacity: 0, y: 16 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    transition: {
+      duration: 0.4,
+      ease: [0.22, 1, 0.36, 1] as [number, number, number, number],
+    },
+  },
+};
+
+// ─── Confetti helper ──────────────────────────────────────────────────────────
+
+/**
+ * Two-burst confetti: a centered burst followed by a wider spray 200 ms later.
+ * Colors are tuned to match the mint design system.
+ */
+function fireConfetti() {
+  const accent = "#00F5D4";
+  const secondary = "#6C5CE7";
+  const white = "#ffffff";
+  const cyan = "#00F5D4";
+
+  const shared = {
+    particleCount: 70,
+    spread: 80,
+    startVelocity: 38,
+    ticks: 200,
+    colors: [accent, secondary, white, cyan],
+    scalar: 0.9,
+  };
+
+  // Centred burst
+  confetti({ ...shared, origin: { x: 0.5, y: 0.55 } });
+
+  // Flanking spray 200 ms later
+  setTimeout(() => {
+    confetti({
+      ...shared,
+      particleCount: 40,
+      spread: 120,
+      origin: { x: 0.3, y: 0.6 },
+    });
+    confetti({
+      ...shared,
+      particleCount: 40,
+      spread: 120,
+      origin: { x: 0.7, y: 0.6 },
+    });
+  }, 200);
 }
 
-export default function CreatePaymentForm() {
-  const t = useTranslations("createPaymentForm");
-  const [amount, setAmount] = useState("");
-  const [asset, setAsset] = useState<"XLM" | "USDC">("XLM");
-  const [recipient, setRecipient] = useState("");
-  const [description, setDescription] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<CreatedPayment | null>(null);
-  const apiKey = useMerchantApiKey();
-  const hydrated = useMerchantHydrated();
-  const trustedAddresses = useMerchantTrustedAddresses();
+// ─── Animated check icon ──────────────────────────────────────────────────────
 
-  useHydrateMerchantStore();
+function AnimatedCheck() {
+  return (
+    <motion.div
+      initial={{ scale: 0, rotate: -30 }}
+      animate={{ scale: 1, rotate: 0 }}
+      transition={{ type: "spring", stiffness: 320, damping: 18, delay: 0.05 }}
+      className="mx-auto mb-2 flex h-14 w-14 items-center justify-center rounded-full bg-accent/15 ring-1 ring-accent/30"
+    >
+      <motion.svg
+        viewBox="0 0 24 24"
+        className="h-7 w-7 text-accent"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2.2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <motion.path
+          d="M5 13l4 4L19 7"
+          initial={{ pathLength: 0 }}
+          animate={{ pathLength: 1 }}
+          transition={{ duration: 0.45, ease: "easeOut", delay: 0.15 }}
+        />
+      </motion.svg>
+    </motion.div>
+  );
+}
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
+// ─── Success card ─────────────────────────────────────────────────────────────
 
-    // Client-side validation
-    const numAmount = parseFloat(amount);
-    if (isNaN(numAmount) || numAmount <= 0) {
-      setError(t("invalidAmount"));
-      return;
-    }
-    if (!STELLAR_ADDRESS_RE.test(recipient.trim())) {
-      setError(t("invalidRecipient"));
-      return;
-    }
+interface SuccessCardProps {
+  created: CreatedPayment;
+  onReset: () => void;
+  t: ReturnType<typeof useTranslations>;
+}
 
-    setLoading(true);
+function SuccessCard({ created, onReset, t }: SuccessCardProps) {
+  const [showQrModal, setShowQrModal] = useState(false);
+
+  useEffect(() => {
+    fireConfetti();
+  }, []);
+
+  const handleCopyAndOpenQr = async () => {
     try {
-      const body: Record<string, unknown> = {
-        amount: numAmount,
-        asset,
-        recipient: recipient.trim(),
-      };
-      if (asset === "USDC") body.asset_issuer = USDC_ISSUER;
-      if (description.trim()) body.description = description.trim();
-      if (useSessionBranding) {
-        for (const [key, color] of Object.entries(branding)) {
-          if (!HEX_COLOR_REGEX.test(color)) {
-            setError(t("invalidHexColor", { field: key }));
-            setLoading(false);
-            return;
-          }
-        }
-        body.branding_overrides = branding;
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(created.payment_link);
+      } else {
+        throw new Error("Clipboard unavailable");
       }
-
-      const res = await fetch(`${API_URL}/api/create-payment`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey!,
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.error ?? t("failedCreate"));
-
-      setCreated(data);
-      toast.success(t("createdToast"));
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : t("failedCreate");
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
+    } catch {
+      const el = document.createElement("textarea");
+      el.value = created.payment_link;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
     }
+
+    setShowQrModal(true);
   };
 
-  const handleReset = () => {
-    setCreated(null);
-
-    setAmount("");
-    setRecipient("");
-    setDescription("");
-    setAsset("XLM");
-    setUseSessionBranding(false);
-    setBranding(DEFAULT_BRANDING);
-    setSelectedTrustedAddress("");
-
-    // 🧹 clear localStorage
-    localStorage.removeItem("payment_amount");
-    localStorage.removeItem("payment_asset");
-    localStorage.removeItem("payment_recipient");
-    localStorage.removeItem("payment_description");
-    localStorage.removeItem("payment_use_branding");
-    localStorage.removeItem("payment_branding");
-    localStorage.removeItem("payment_trusted_address");
-
-    setError(null);
-  };
-
-  const handleTrustedAddressSelect = (addressId: string) => {
-    setSelectedTrustedAddress(addressId);
-    if (addressId) {
-      const selected = trustedAddresses.find((addr) => addr.id === addressId);
-      if (selected) {
-        setRecipient(selected.address);
-      }
-    }
-  };
-
-  const updateBrandingField = (
-    key: keyof typeof DEFAULT_BRANDING,
-    value: string,
-  ) => {
-    setBranding((current) => ({
-      ...current,
-      [key]: normalizeHexInput(value),
-    }));
-  };
-
-  // Avoid hydration mismatch — render nothing until localStorage is read
-  if (!hydrated) return null;
-
-  // No API key stored — direct the user to register first
-  if (!apiKey) {
-    return (
-      <div className="flex flex-col items-center gap-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-8 text-center">
-        <p className="text-base font-medium text-yellow-200">
-          {t("noApiKeyTitle")}
-        </p>
-        <p className="text-sm text-slate-400">
-          {t("noApiKeyDescription")}
-        </p>
-        <Link
-          href="/register"
-          className="mt-2 rounded-xl bg-mint px-5 py-2.5 text-sm font-bold text-black transition-all hover:bg-glow"
+  return (
+    <>
+      <motion.div
+        key="success"
+        variants={successVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+        className="flex flex-col gap-6"
+      >
+        {/* Main card */}
+        <motion.div
+          variants={childVariants}
+          className="relative overflow-hidden rounded-2xl border border-accent/25 bg-accent/5 p-6 backdrop-blur"
         >
-          {t("registerAsMerchant")}
-        </Link>
-      </div>
-    );
-  }
+          {/* Subtle radial glow in the corner */}
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-accent/10 blur-3xl"
+          />
 
-  // Success — show the generated payment link
-  if (created) {
-    return (
-      <div className="flex flex-col gap-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="rounded-2xl border border-mint/30 bg-mint/5 p-6 backdrop-blur">
-          <div className="flex flex-col gap-2">
-            <p className="font-mono text-xs uppercase tracking-[0.2em] text-mint">
+          {/* Check + heading */}
+          <div className="flex flex-col items-center text-center">
+            <AnimatedCheck />
+            <motion.p
+              variants={childVariants}
+              className="font-mono text-xs uppercase tracking-[0.2em] text-accent"
+            >
               {t("readyEyebrow")}
-            </p>
-            <h2 className="text-xl font-semibold text-white">
+            </motion.p>
+            <motion.h2
+              variants={childVariants}
+              className="mt-1 text-xl font-semibold text-white"
+            >
               {t("readyTitle")}
-            </h2>
-            <p className="text-sm text-slate-400">
+            </motion.h2>
+            <motion.p
+              variants={childVariants}
+              className="mt-1 text-sm text-slate-400"
+            >
               {t("readyDescription")}
-            </p>
+            </motion.p>
           </div>
 
-          <div className="mt-6 flex flex-col gap-3">
+          {/* Payment link row */}
+          <motion.div
+            variants={childVariants}
+            className="mt-6 flex flex-col gap-2"
+          >
             <label className="text-xs font-medium text-slate-300">
               {t("paymentLink")}
             </label>
-            <div className="flex items-center gap-2 overflow-hidden rounded-xl border border-white/10 bg-black/40 p-1 pl-4">
-              <code className="flex-1 truncate font-mono text-sm text-mint">
+            <div className="flex items-center gap-2 overflow-hidden rounded-xl border border-white/10 bg-black/40 p-1 pl-4 transition-colors hover:border-accent/25">
+              <code className="flex-1 truncate font-mono text-sm text-accent">
                 {created.payment_link}
               </code>
               <CopyButton text={created.payment_link} />
             </div>
-          </div>
+          </motion.div>
 
-          <div className="mt-4 grid grid-cols-2 gap-3">
+          {/* Meta grid */}
+          <motion.div
+            variants={childVariants}
+            className="mt-4 grid grid-cols-2 gap-3"
+          >
             <div className="rounded-xl border border-white/10 bg-white/5 p-3">
               <p className="mb-1 text-xs uppercase tracking-wider text-slate-500">
                 {t("paymentId")}
@@ -227,247 +280,690 @@ export default function CreatePaymentForm() {
                 {created.status}
               </p>
             </div>
-          </div>
-        </div>
+          </motion.div>
 
-        <button
+          <motion.div
+            variants={childVariants}
+            className="mt-4 flex flex-wrap gap-2"
+          >
+            <button
+              type="button"
+              onClick={() => void handleCopyAndOpenQr()}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent/30 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition-colors hover:bg-accent/15"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.8}
+              >
+                <path
+                  d="M12 3v12m0 0 4-4m-4 4-4-4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M5 21h14a2 2 0 0 0 2-2v-3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M5 21a2 2 0 0 1-2-2v-3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {t("shareLink")}
+            </button>
+          </div>
+        </motion.div>
+
+        {/* Reset link */}
+        <motion.button
+          variants={childVariants}
           type="button"
-          onClick={handleReset}
+          onClick={onReset}
           className="text-center text-sm font-medium text-slate-400 underline underline-offset-4 transition-colors hover:text-white"
         >
           {t("createAnother")}
-        </button>
+        </motion.button>
+      </motion.div>
+
+      <CheckoutQrModal
+        isOpen={showQrModal}
+        onClose={() => setShowQrModal(false)}
+        qrValue={created.payment_link}
+        paymentId={created.payment_id}
+      />
+    </>
+  );
+}
+
+// ─── Main form ────────────────────────────────────────────────────────────────
+
+export default function CreatePaymentForm() {
+  const t = useTranslations("createPaymentForm");
+  const [view, setView] = useState<"form" | "code">("form");
+  const [amount, setAmount, removeAmount] = useLocalStorage("payment_amount", "");
+  const [asset, setAsset, removeAsset] = useLocalStorage<"XLM" | "USDC">(
+    "payment_asset",
+    "XLM",
+  );
+  const [recipient, setRecipient, removeRecipient] = useLocalStorage("payment_recipient", "");
+  const [description, setDescription, removeDescription] = useLocalStorage(
+    "payment_description",
+    "",
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [amountError, setAmountError] = useState<string | null>(null);
+  const [recipientError, setRecipientError] = useState<string | null>(null);
+  const [webhookUrlError, setWebhookUrlError] = useState<string | null>(null);
+  const [paymentFlow, dispatchPaymentFlow] = useReducer(
+    createPaymentFlowReducer,
+    initialCreatePaymentFlowState,
+  );
+  const apiKey = useMerchantApiKey();
+  const hydrated = useMerchantHydrated();
+  const trustedAddresses = useMerchantTrustedAddresses();
+  const [useSessionBranding, setUseSessionBranding, removeUseSessionBranding] = useLocalStorage(
+    "payment_use_branding",
+    false,
+  );
+  const [branding, setBranding, removeBranding] = useLocalStorage(
+    "payment_branding",
+    DEFAULT_BRANDING,
+  );
+  const [selectedTrustedAddress, setSelectedTrustedAddress, removeSelectedTrustedAddress] = useLocalStorage(
+    "payment_trusted_address",
+    "",
+  );
+  useHydrateMerchantStore();
+  const selectedTrustedAddressLabel =
+    trustedAddresses.find((address) => address.id === selectedTrustedAddress)
+      ?.label ?? null;
+  const amountPlaceholder = t("amountPlaceholder", {
+    asset,
+    exampleAmount: asset === "USDC" ? "50.00" : "15.00",
+  });
+  const recipientPlaceholder = selectedTrustedAddressLabel
+    ? t("recipientPlaceholderSelected", {
+        asset,
+        label: selectedTrustedAddressLabel,
+      })
+    : t("recipientPlaceholder", { asset });
+  const validateAmount = (value: string) => {
+    const numAmount = parseFloat(value);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      return "Amount must be greater than 0.";
+    }
+    return null;
+  };
+
+  const validateRecipient = (value: string) => {
+    if (!STELLAR_ADDRESS_RE.test(value.trim())) {
+      return "Must be a valid Stellar public key (56 characters, starts with G).";
+    }
+    return null;
+  };
+
+  const validateWebhookUrl = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "Webhook URL must start with http:// or https://";
+      }
+    } catch {
+      return "Enter a valid webhook URL.";
+    }
+    return null;
+  };
+
+  const isFormValid =
+    !validateAmount(amount) &&
+    !validateRecipient(recipient) &&
+    !validateWebhookUrl(description) &&
+    amount.trim().length > 0 &&
+    recipient.trim().length > 0;
+  const isSubmitting = paymentFlow.stage === "submitting";
+  const isSuccessView = paymentFlow.stage === "success" && !!paymentFlow.created;
+
+  // ── Rate-limit countdown ──────────────────────────────────
+  const [retryAfter, setRetryAfter] = useState(0);
+  const retryTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (retryAfter <= 0) {
+      if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+      return;
+    }
+
+    retryTimerRef.current = setInterval(() => {
+      setRetryAfter((prev) => {
+        if (prev <= 1) {
+          clearInterval(retryTimerRef.current!);
+          retryTimerRef.current = null;
+          setError(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      if (retryTimerRef.current) clearInterval(retryTimerRef.current);
+    };
+  }, [retryAfter]);
+  // ──────────────────────────────────────────────────────────
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    // Client-side validation
+    const nextAmountError = validateAmount(amount);
+    const nextRecipientError = validateRecipient(recipient);
+    const nextWebhookUrlError = validateWebhookUrl(description);
+    setAmountError(nextAmountError);
+    setRecipientError(nextRecipientError);
+    setWebhookUrlError(nextWebhookUrlError);
+    if (nextAmountError || nextRecipientError || nextWebhookUrlError) return;
+
+    const numAmount = parseFloat(amount);
+
+    try {
+      const body: Record<string, unknown> = {
+        amount: numAmount,
+        asset,
+        recipient: recipient.trim(),
+      };
+      if (asset === "USDC") body.asset_issuer = USDC_ISSUER;
+      if (description.trim()) body.description = description.trim();
+      if (useSessionBranding) {
+        for (const [key, color] of Object.entries(branding)) {
+          if (!HEX_COLOR_REGEX.test(color as string)) {
+            setError(t("invalidHexColor", { field: key }));
+            return;
+          }
+        }
+        body.branding_overrides = branding;
+      }
+
+      dispatchPaymentFlow({ type: "submit" });
+
+      const res = await fetch(`${API_URL}/api/create-payment`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": apiKey!,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? t("failedCreate"));
+
+      dispatchPaymentFlow({ type: "success", created: data });
+      toast.success(t("createdToast"));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : t("failedCreate");
+      dispatchPaymentFlow({ type: "failure" });
+      setError(message);
+      toast.error(message);
+    }
+  };
+
+  const handleReset = () => {
+    dispatchPaymentFlow({ type: "reset" });
+    removeAmount();
+    removeRecipient();
+    removeDescription();
+    removeAsset();
+    removeUseSessionBranding();
+    removeBranding();
+    removeSelectedTrustedAddress();
+    setError(null);
+    setAmountError(null);
+    setRecipientError(null);
+    setWebhookUrlError(null);
+    setRetryAfter(0);
+  };
+
+  const handleTrustedAddressSelect = (addressId: string) => {
+    setSelectedTrustedAddress(addressId);
+    if (addressId) {
+      const selected = trustedAddresses.find((addr) => addr.id === addressId);
+      if (selected) setRecipient(selected.address);
+    }
+  };
+
+  const updateBrandingField = (
+    key: keyof typeof DEFAULT_BRANDING,
+    value: string,
+  ) => {
+    setBranding((current) => ({ ...current, [key]: normalizeHexInput(value) }));
+  };
+
+  if (!hydrated) return null;
+
+  if (!apiKey) {
+    return (
+      <div className="flex flex-col items-center gap-4 rounded-2xl border border-yellow-500/30 bg-yellow-500/10 p-8 text-center">
+        <p className="text-base font-medium text-yellow-200">
+          {t("noApiKeyTitle")}
+        </p>
+        <p className="text-sm text-slate-400">{t("noApiKeyDescription")}</p>
+        <Link
+          href="/register"
+          className="mt-2 rounded-xl bg-accent px-5 py-2.5 text-sm font-bold text-black transition-all hover:bg-secondary"
+        >
+          {t("registerAsMerchant")}
+        </Link>
       </div>
     );
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-6" noValidate>
-      {error && (
-        <div
-          role="alert"
-          className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400"
+    /**
+     * AnimatePresence watches for children mounting/unmounting and runs their
+     * exit animations before removing them from the DOM.  `mode="wait"` ensures
+     * the form finishes exiting before the success card enters.
+     */
+    <AnimatePresence mode="wait">
+      {isSuccessView && paymentFlow.created ? (
+        <SuccessCard
+          key="success"
+          created={paymentFlow.created}
+          onReset={handleReset}
+          t={t}
+        />
+      ) : (
+        <motion.div
+          key="form"
+          variants={formVariants}
+          initial="visible"
+          exit="exit"
+          className="flex flex-col gap-6"
         >
-          {error}
-        </div>
-      )}
-
-      <div className="flex flex-col gap-4">
-        {/* Amount */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="amount"
-            className="text-xs font-medium uppercase tracking-wider text-slate-400"
-          >
-            {t("amount")}
-          </label>
-          <input
-            id="amount"
-            type="number"
-            min="0.0000001"
-            step="any"
-            required
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-            className="rounded-xl border border-white/10 bg-white/5 p-3 text-white placeholder:text-slate-600 focus:border-mint/50 focus:outline-none focus:ring-1 focus:ring-mint/50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            placeholder="0.00"
-          />
-        </div>
-
-        {/* Asset */}
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
-            {t("asset")}
-          </span>
-          <div className="flex gap-2" role="group" aria-label={t("selectAsset")}>
-            {(["XLM", "USDC"] as const).map((a) => (
-              <button
-                key={a}
-                type="button"
-                onClick={() => setAsset(a)}
-                aria-pressed={asset === a}
-                className={`flex-1 rounded-xl border py-2.5 text-sm font-medium transition-all ${asset === a
-                    ? "border-mint/50 bg-mint/10 text-mint"
-                    : "border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:text-white"
-                  }`}
-              >
-                {a}
-              </button>
-            ))}
-          </div>
-          {asset === "USDC" && (
-            <p className="text-[11px] text-slate-500">
-              {t("issuer")}:{" "}
-              <span className="font-mono">
-                {USDC_ISSUER.slice(0, 8)}…{USDC_ISSUER.slice(-6)}
-              </span>
-            </p>
-          )}
-        </div>
-
-        {/* Trusted Addresses Dropdown */}
-        {trustedAddresses.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            <label
-              htmlFor="trusted-address"
-              className="text-xs font-medium uppercase tracking-wider text-slate-400"
-          >
-              {t("trustedAddresses")}
-            </label>
-            <select
-              id="trusted-address"
-              value={selectedTrustedAddress}
-              onChange={(e) => handleTrustedAddressSelect(e.target.value)}
-              className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white focus:border-mint/50 focus:outline-none focus:ring-1 focus:ring-mint/50"
-            >
-              <option value="">{t("selectSavedAddress")}</option>
-              {trustedAddresses.map((addr) => (
-                <option key={addr.id} value={addr.id}>
-                  {addr.label} ({addr.address.slice(0, 8)}...{addr.address.slice(-6)})
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Recipient */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="recipient"
-            className="text-xs font-medium uppercase tracking-wider text-slate-400"
-          >
-            {t("recipientAddress")}
-          </label>
-          <input
-            id="recipient"
-            type="text"
-            required
-            value={recipient}
-            onChange={(e) => setRecipient(e.target.value)}
-            className="rounded-xl border border-white/10 bg-white/5 p-3 font-mono text-sm text-white placeholder:font-sans placeholder:text-slate-600 focus:border-mint/50 focus:outline-none focus:ring-1 focus:ring-mint/50"
-            placeholder="GABC…XYZ"
-            autoComplete="off"
-            spellCheck={false}
-          />
-        </div>
-
-        {/* Description (optional) */}
-        <div className="flex flex-col gap-1.5">
-          <label
-            htmlFor="description"
-            className="text-xs font-medium uppercase tracking-wider text-slate-400"
-          >
-            {t("descriptionLabel")}{" "}
-            <span className="normal-case text-slate-600">({t("optional")})</span>
-          </label>
-          <input
-            id="description"
-            type="text"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="rounded-xl border border-white/10 bg-white/5 p-3 text-white placeholder:text-slate-600 focus:border-mint/50 focus:outline-none focus:ring-1 focus:ring-mint/50"
-            placeholder="e.g. Invoice #42"
-          />
-        </div>
-
-        <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-300">
-                {t("brandingTitle")}
-              </p>
-              <p className="mt-1 text-[11px] text-slate-500">
-                {t("brandingDescription")}
-              </p>
-            </div>
+          {/* Tab bar */}
+          <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
             <button
               type="button"
-              onClick={() => setUseSessionBranding((v) => !v)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${useSessionBranding
-                  ? "bg-mint text-black"
-                  : "border border-white/20 text-slate-300"
-                }`}
+              onClick={() => setView("form")}
+              className={`relative flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                view === "form" ? "text-black" : "text-slate-400 hover:text-white"
+              }`}
             >
-              {useSessionBranding ? t("enabled") : t("disabled")}
+              {view === "form" && (
+                <motion.div
+                  layoutId="view-tab-bg"
+                  className="absolute inset-0 rounded-lg bg-accent"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10">{t("generate")}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("code")}
+              className={`relative flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                view === "code" ? "text-black" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              {view === "code" && (
+                <motion.div
+                  layoutId="view-tab-bg"
+                  className="absolute inset-0 rounded-lg bg-accent"
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10">{t("integrationCode")}</span>
             </button>
           </div>
 
-          {useSessionBranding && (
-            <div className="mt-4 grid gap-3">
-              {([
-                ["primary_color", t("primary")],
-                ["secondary_color", t("secondary")],
-                ["background_color", t("background")],
-              ] as const).map(([field, label]) => (
-                <label key={field} className="flex flex-col gap-1.5">
-                  <span className="text-xs text-slate-400">{label}</span>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="color"
-                      value={branding[field]}
-                      onChange={(e) => updateBrandingField(field, e.target.value)}
-                      className="h-9 w-14 rounded border border-white/10 bg-transparent p-1"
-                    />
-                    <input
-                      type="text"
-                      value={branding[field]}
-                      onChange={(e) => updateBrandingField(field, e.target.value)}
-                      className="flex-1 rounded-lg border border-white/10 bg-black/40 p-2 font-mono text-xs text-white"
-                    />
-                  </div>
-                </label>
-              ))}
+          {view === "code" ? (
+            <IntegrationCodeSnippets
+              apiKey={apiKey!}
+              amount={amount}
+              asset={asset}
+              recipient={recipient}
+              description={description}
+              usdcIssuer={USDC_ISSUER}
+            />
+          ) : (
+          <motion.form
+            key="payment-form"
+            variants={formVariants}
+            initial="visible"
+            onSubmit={handleSubmit}
+            className="flex flex-col gap-6"
+            noValidate
+          >
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              role="alert"
+              className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-400"
+            >
+              {error}
+            </motion.div>
+          )}
 
-              <div
-                className="rounded-lg border border-white/10 p-3"
-                style={{ background: branding.background_color }}
+          <div className="flex flex-col gap-4">
+            {/* Amount */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="amount"
+                className="text-xs font-medium uppercase tracking-wider text-slate-400"
               >
-                <p className="text-xs" style={{ color: branding.secondary_color }}>
-                  {t("checkoutPreview")}
+                {t("amount")}
+              </label>
+              <input
+                id="amount"
+                type="number"
+                min="0.0000001"
+                step="any"
+                required
+                value={amount}
+                onChange={(e) => {
+                  setAmount(e.target.value);
+                  setAmountError(validateAmount(e.target.value));
+                }}
+                aria-invalid={!!amountError}
+                aria-describedby={amountError ? "amount-error" : undefined}
+                className={`rounded-xl border bg-white/5 p-3 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${amountError ? "border-red-500/50 focus:border-red-500/50 focus:ring-red-500/50" : "border-white/10 focus:border-accent/50 focus:ring-accent/50"}`}
+                placeholder={amountPlaceholder}
+              />
+              {amountError && (
+                <p
+                  id="amount-error"
+                  role="alert"
+                  className="text-xs text-red-400"
+                >
+                  {amountError}
                 </p>
+              )}
+            </div>
+
+            {/* Asset */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                {t("asset")}
+              </span>
+              <div
+                className="flex gap-2"
+                role="group"
+                aria-label={t("selectAsset")}
+              >
+                {(["XLM", "USDC"] as const).map((a) => (
+                  <button
+                    key={a}
+                    type="button"
+                    onClick={() => setAsset(a)}
+                    aria-pressed={asset === a}
+                    className={`flex-1 rounded-xl border py-2.5 text-sm font-medium transition-all ${
+                      asset === a
+                        ? "border-accent/50 bg-accent/10 text-accent"
+                        : "border-white/10 bg-white/5 text-slate-400 hover:border-white/20 hover:text-white"
+                    }`}
+                  >
+                    {a}
+                  </button>
+                ))}
+              </div>
+              {asset === "USDC" && (
+                <p className="text-[11px] text-slate-500">
+                  {t("issuer")}:{" "}
+                  <span className="font-mono">
+                    {USDC_ISSUER.slice(0, 8)}…{USDC_ISSUER.slice(-6)}
+                  </span>
+                </p>
+              )}
+            </div>
+
+            {/* Trusted Addresses */}
+            {trustedAddresses.length > 0 && (
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="trusted-address"
+                  className="text-xs font-medium uppercase tracking-wider text-slate-400"
+                >
+                  {t("trustedAddresses")}
+                </label>
+                <select
+                  id="trusted-address"
+                  value={selectedTrustedAddress}
+                  onChange={(e) => handleTrustedAddressSelect(e.target.value)}
+                  className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white focus:border-accent/50 focus:outline-none focus:ring-1 focus:ring-accent/50"
+                >
+                  <option value="">{t("selectSavedAddress")}</option>
+                  {trustedAddresses.map((addr) => (
+                    <option key={addr.id} value={addr.id}>
+                      {addr.label} ({addr.address.slice(0, 8)}...
+                      {addr.address.slice(-6)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Recipient */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="recipient"
+                className="text-xs font-medium uppercase tracking-wider text-slate-400"
+              >
+                {t("recipientAddress")}
+                <InfoTooltip
+                  className="ml-2"
+                  content={
+                    <span>
+                      Use a valid Stellar public key that starts with G and is 56
+                      characters long. Example:
+                      <br />
+                      <code className="text-[11px] text-accent">
+                        GDQP2KPQGKIH...MBCQ4MMR
+                      </code>
+                    </span>
+                  }
+                >
+                  <span tabIndex={0}>What is this?</span>
+                </InfoTooltip>
+              </label>
+              <input
+                id="recipient"
+                type="text"
+                required
+                value={recipient}
+                onChange={(e) => {
+                  setRecipient(e.target.value);
+                  setRecipientError(validateRecipient(e.target.value));
+                }}
+                aria-invalid={!!recipientError}
+                aria-describedby={
+                  recipientError ? "recipient-error" : undefined
+                }
+                className={`rounded-xl border bg-white/5 p-3 font-mono text-sm text-white placeholder:font-sans placeholder:text-slate-600 focus:outline-none focus:ring-1 ${recipientError ? "border-red-500/50 focus:border-red-500/50 focus:ring-red-500/50" : "border-white/10 focus:border-accent/50 focus:ring-accent/50"}`}
+                placeholder={recipientPlaceholder}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              {recipientError && (
+                <p
+                  id="recipient-error"
+                  role="alert"
+                  className="text-xs text-red-400"
+                >
+                  {recipientError}
+                </p>
+              )}
+            </div>
+
+            {/* Description */}
+            <div className="flex flex-col gap-1.5">
+              <label
+                htmlFor="description"
+                className="text-xs font-medium uppercase tracking-wider text-slate-400"
+              >
+                {t("descriptionLabel")}{" "}
+                <span className="normal-case text-slate-600">
+                  ({t("optional")})
+                </span>
+                <InfoTooltip
+                  className="ml-2"
+                  content={
+                    <span>
+                      If you add a webhook URL here, use a full URL like
+                      <br />
+                      <code className="text-[11px] text-accent">
+                        https://example.com/api/webhooks/stellar
+                      </code>
+                    </span>
+                  }
+                >
+                  <span tabIndex={0}>Webhook URL help</span>
+                </InfoTooltip>
+              </label>
+              <input
+                id="description"
+                type="text"
+                value={description}
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  setWebhookUrlError(validateWebhookUrl(e.target.value));
+                }}
+                aria-invalid={Boolean(webhookUrlError)}
+                aria-describedby={webhookUrlError ? "webhook-url-error" : undefined}
+                className={`rounded-xl border bg-white/5 p-3 text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 ${webhookUrlError ? "border-red-500/50 focus:border-red-500/50 focus:ring-red-500/50" : "border-white/10 focus:border-mint/50 focus:ring-mint/50"}`}
+                placeholder="Optional memo or webhook URL (https://...)"
+              />
+              {webhookUrlError && (
+                <p id="webhook-url-error" className="text-xs text-red-400" role="alert">
+                  {webhookUrlError}
+                </p>
+              )}
+            </div>
+
+            {/* Branding panel */}
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-medium uppercase tracking-wider text-slate-300">
+                    {t("brandingTitle")}
+                  </p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {t("brandingDescription")}
+                  </p>
+                </div>
                 <button
                   type="button"
-                  className="mt-2 rounded-md px-3 py-1.5 text-xs font-semibold"
-                  style={{ background: branding.primary_color, color: "#000" }}
+                  onClick={() => setUseSessionBranding((v) => !v)}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    useSessionBranding
+                      ? "bg-mint text-black"
+                      : "border border-white/20 text-slate-300"
+                  }`}
                 >
-                  {t("payNow")}
+                  {useSessionBranding ? t("enabled") : t("disabled")}
                 </button>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
 
-      <button
-        type="submit"
-        disabled={loading}
-        className="group relative flex h-12 items-center justify-center rounded-xl bg-mint px-6 font-bold text-black transition-all hover:bg-glow disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loading ? (
-          <span className="flex items-center gap-2">
-            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-                fill="none"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              />
-            </svg>
-            {t("generating")}
-          </span>
-        ) : (
-          t("generate")
-        )}
-        <div className="absolute inset-0 -z-10 bg-mint/20 opacity-0 blur-xl transition-opacity group-hover:opacity-100" />
-      </button>
-    </form>
+              {useSessionBranding && (
+                <div className="mt-4 grid gap-3">
+                  {(
+                    [
+                      ["primary_color", t("primary")],
+                      ["secondary_color", t("secondary")],
+                      ["background_color", t("background")],
+                    ] as const
+                  ).map(([field, label]) => (
+                    <label key={field} className="flex flex-col gap-1.5">
+                      <span className="text-xs text-slate-400">{label}</span>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="color"
+                          value={branding[field]}
+                          onChange={(e) =>
+                            updateBrandingField(field, e.target.value)
+                          }
+                          className="h-9 w-14 rounded border border-white/10 bg-transparent p-1"
+                        />
+                        <input
+                          type="text"
+                          value={branding[field]}
+                          onChange={(e) =>
+                            updateBrandingField(field, e.target.value)
+                          }
+                          className="flex-1 rounded-lg border border-white/10 bg-black/40 p-2 font-mono text-xs text-white"
+                        />
+                      </div>
+                    </label>
+                  ))}
+
+                  <div
+                    className="rounded-lg border border-white/10 p-3"
+                    style={{ background: branding.background_color }}
+                  >
+                    <p
+                      className="text-xs"
+                      style={{ color: branding.secondary_color }}
+                    >
+                      {t("checkoutPreview")}
+                    </p>
+                    <button
+                      type="button"
+                      className="mt-2 rounded-md px-3 py-1.5 text-xs font-semibold"
+                      style={{
+                        background: branding.primary_color,
+                        color: "#000",
+                      }}
+                    >
+                      {t("payNow")}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Submit */}
+          <button
+            type="submit"
+            disabled={isSubmitting || !isFormValid}
+            className="group relative flex h-12 items-center justify-center rounded-xl bg-mint px-6 font-bold text-black transition-all hover:bg-glow disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSubmitting ? (
+              <span className="flex items-center gap-2">
+                <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                    fill="none"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+                {t("generating")}
+              </span>
+            ) : (
+              t("generate")
+            )}
+            <div className="absolute inset-0 -z-10 bg-mint/20 opacity-0 blur-xl transition-opacity group-hover:opacity-100" />
+          </button>
+          </motion.form>
+          )}
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

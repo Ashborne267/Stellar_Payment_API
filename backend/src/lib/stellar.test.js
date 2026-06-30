@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // vi.hoisted makes mockCall available inside the vi.mock factory (which is hoisted above imports)
-const { mockCall, mockTxCall } = vi.hoisted(() => ({
+const { mockCall, mockTxCall, mockFeeStatsCall } = vi.hoisted(() => ({
   mockCall: vi.fn(),
-  mockTxCall: vi.fn()
+  mockTxCall: vi.fn(),
+  mockFeeStatsCall: vi.fn(),
 }))
 
 vi.mock('stellar-sdk', () => {
@@ -11,6 +12,7 @@ vi.mock('stellar-sdk', () => {
   MockAsset.native = vi.fn(() => ({ isNative: () => true }))
 
   const MockServer = vi.fn(() => ({
+    feeStats: mockFeeStatsCall,
     payments: () => ({
       forAccount: () => ({
         order: () => ({
@@ -29,10 +31,16 @@ vi.mock('stellar-sdk', () => {
     })
   }))
 
-  return { Asset: MockAsset, Horizon: { Server: MockServer } }
+  return {
+    Asset: MockAsset,
+    Horizon: { Server: MockServer },
+    StrKey: {
+      isValidEd25519PublicKey: vi.fn((value) => typeof value === "string" && value.startsWith("G") && value.length === 56),
+    },
+  }
 })
 
-import { findMatchingPayment } from './stellar.js'
+import { findMatchingPayment, getNetworkFeeStats } from './stellar.js'
 
 // Helper to build a payment record with sensible defaults
 const makePayment = (overrides = {}) => ({
@@ -51,6 +59,7 @@ describe('findMatchingPayment', () => {
   beforeEach(() => {
     mockCall.mockReset()
     mockTxCall.mockReset()
+    mockFeeStatsCall.mockReset()
   })
 
   it('returns matching XLM payment', async () => {
@@ -62,7 +71,7 @@ describe('findMatchingPayment', () => {
       assetCode: 'XLM'
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('returns matching non-native (USDC) payment', async () => {
@@ -84,7 +93,7 @@ describe('findMatchingPayment', () => {
       assetIssuer: USDC_ISSUER
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('matches when received amount differs by exactly the tolerance boundary (0.0000001)', async () => {
@@ -161,7 +170,7 @@ describe('findMatchingPayment', () => {
       assetIssuer: USDC_ISSUER
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('rejects path_payment_strict_receive when destination amount does not match', async () => {
@@ -223,7 +232,32 @@ describe('findMatchingPayment', () => {
       assetCode: 'XLM'
     })
 
-    expect(result).toEqual({ id: 'op-first', transaction_hash: 'tx-first', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-first', transaction_hash: 'tx-first', is_multisig: false, received_amount: expect.any(String) })
+  })
+
+  it('returns a fee estimate that responds to current fee stats', async () => {
+    mockFeeStatsCall.mockResolvedValue({
+      last_ledger_base_fee: '100',
+      fee_charged: {
+        mode: '250',
+        p50: '200'
+      },
+      max_fee: {
+        mode: '300'
+      }
+    })
+
+    const result = await getNetworkFeeStats(1)
+
+    expect(result).toMatchObject({
+      network: 'testnet',
+      horizonUrl: 'https://horizon-testnet.stellar.org',
+      operationCount: 1,
+      lastLedgerBaseFee: 100,
+      recommendedFeeStroops: 250,
+      totalFeeStroops: 250,
+      totalFeeXlm: '0.0000250'
+    })
   })
 
   // ── Memo matching (Issue #16) ──────────────────────────────────────
@@ -240,7 +274,7 @@ describe('findMatchingPayment', () => {
       memoType: 'text'
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('rejects payment with wrong memo value', async () => {
@@ -285,7 +319,7 @@ describe('findMatchingPayment', () => {
       memoType: 'id'
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('matches hash memo type', async () => {
@@ -301,7 +335,7 @@ describe('findMatchingPayment', () => {
       memoType: 'hash'
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('matches return memo type', async () => {
@@ -317,7 +351,7 @@ describe('findMatchingPayment', () => {
       memoType: 'return'
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123' })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
   })
 
   it('skips memo check when no memo is provided', async () => {
@@ -329,7 +363,7 @@ describe('findMatchingPayment', () => {
       assetCode: 'XLM'
     })
 
-    expect(result).toEqual({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false })
+    expect(result).toMatchObject({ id: 'op-1', transaction_hash: 'tx-abc123', is_multisig: false, received_amount: expect.any(String) })
     expect(mockTxCall).not.toHaveBeenCalled()
   })
 

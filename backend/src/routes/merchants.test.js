@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import express from "express";
+import request from "supertest";
 
 const eq = vi.fn();
 const update = vi.fn(() => ({ eq }));
@@ -26,7 +28,10 @@ function getRotateWebhookSecretHandler(router) {
     throw new Error("rotate-webhook-secret route not found");
   }
 
-  return layer.route.stack[0].handle;
+  // Find the actual handler: it's typically the last one in the route's stack,
+  // following any middlewares like validateRequest.
+  const handlers = layer.route.stack;
+  return handlers[handlers.length - 1].handle;
 }
 
 describe("POST /api/merchants/rotate-webhook-secret", () => {
@@ -37,7 +42,8 @@ describe("POST /api/merchants/rotate-webhook-secret", () => {
   });
 
   it("rotates secret with default 24h grace period", async () => {
-    const { default: router } = await import("./merchants.js");
+    const { default: createMerchantsRouter } = await import("./merchants.js");
+    const router = createMerchantsRouter();
     const handler = getRotateWebhookSecretHandler(router);
 
     const req = {
@@ -78,7 +84,8 @@ describe("POST /api/merchants/rotate-webhook-secret", () => {
   });
 
   it("uses request grace period override", async () => {
-    const { default: router } = await import("./merchants.js");
+    const { default: createMerchantsRouter } = await import("./merchants.js");
+    const router = createMerchantsRouter();
     const handler = getRotateWebhookSecretHandler(router);
 
     const req = {
@@ -107,5 +114,38 @@ describe("POST /api/merchants/rotate-webhook-secret", () => {
     const responsePayload = res.json.mock.calls[0][0];
     expect(responsePayload.grace_period_hours).toBe(2);
     expect(next).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsigned requests before rotating the secret", async () => {
+    const { default: createMerchantsRouter } = await import("./merchants.js");
+    const app = express();
+    app.use(express.json());
+    app.use("/api", createMerchantsRouter());
+
+    const response = await request(app)
+      .post("/api/merchants/rotate-webhook-secret")
+      .send({});
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: "Missing x-api-key header" });
+    expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe("merchant route authentication", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("protects webhook settings behind API key auth", async () => {
+    const { default: createMerchantsRouter } = await import("./merchants.js");
+    const app = express();
+    app.use(express.json());
+    app.use("/api", createMerchantsRouter());
+
+    const response = await request(app).get("/api/webhook-settings");
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: "Missing x-api-key header" });
   });
 });

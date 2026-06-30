@@ -1,23 +1,28 @@
 import "dotenv/config";
-import express from "express";
-import rateLimit from "express-rate-limit";
 import { randomUUID } from "node:crypto";
-import {
-  findMatchingPayment,
-  findStrictReceivePaths,
-  createRefundTransaction,
-} from "../lib/stellar.js";
-import { supabase } from "../lib/supabase.js";
+import { logger } from "../lib/logger.js";
+import express from "express";
+import { paymentService } from "../services/paymentService.js";
+import { resolveAssetIssuer } from "../constants/assetConstants.js";
 import { validateUuidParam } from "../lib/validate-uuid.js";
 import {
   paymentSessionZodSchema,
-  parseVersionedPaymentBody,
+  paymentZodSchema,
+  refundConfirmSchema,
+  pathPaymentQuoteQuerySchema,
+  paymentsListQuerySchema
 } from "../lib/request-schemas.js";
+import { validateRequest } from "../lib/validation.js";
 import { createCreatePaymentRateLimit } from "../lib/create-payment-rate-limit.js";
-import { sendWebhook } from "../lib/webhooks.js";
+import { createVerifyPaymentRateLimit } from "../lib/rate-limit.js";
+import { createPathPaymentQuoteRateLimit } from "../lib/path-payment-quote-rate-limit.js";
+import { recaptchaMiddleware } from "../lib/recaptcha.js";
+import { sendWebhook, isEventSubscribed } from "../lib/webhooks.js";
 import { sendReceiptEmail } from "../lib/email.js";
 import { renderReceiptEmail } from "../lib/email-templates.js";
 import { resolveBrandingConfig } from "../lib/branding.js";
+import { generatePaginationLinks } from "../lib/pagination-links.js";
+
 import {
   connectRedisClient,
   getCachedPayment,
@@ -25,48 +30,114 @@ import {
   invalidatePaymentCache,
 } from "../lib/redis.js";
 import { getPayloadForVersion } from "../webhooks/resolver.js";
+import { streamManager } from "../lib/stream-manager.js";
 import {
   paymentCreatedCounter,
   paymentConfirmedCounter,
   paymentConfirmationLatency,
+  paymentFailedCounter,
 } from "../lib/metrics.js";
+import { sanitizeMetadataMiddleware } from "../lib/sanitize-metadata.js";
+import {
+  findMatchingPayment,
+  findAnyRecentPayment,
+  findStrictReceivePaths,
+  getNetworkFeeStats,
+  isValidStellarPublicKey,
+  verifyTransactionSignature,
+} from "../lib/stellar.js";
+
 
 const createPaymentRateLimit = createCreatePaymentRateLimit();
+const pathPaymentQuoteRateLimit = createPathPaymentQuoteRateLimit();
 
-const defaultVerifyPaymentRateLimit = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: "Too many verification requests, please try again later." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+const defaultVerifyPaymentRateLimit = createVerifyPaymentRateLimit();
+let supabaseClientPromise;
+
+function isSignatureVerificationAccepted(result) {
+  if (result === true) {
+    return true;
+  }
+
+  return Boolean(result && typeof result === "object" && result.valid === true);
+}
+
+async function verifyTransactionSignatureIfAvailable(txHash) {
+  if (typeof verifyTransactionSignature !== "function") {
+    return { valid: true, skipped: true };
+  }
+
+  return verifyTransactionSignature(txHash);
+}
+
+async function getSupabaseClient() {
+  if (!supabaseClientPromise) {
+    supabaseClientPromise = import("../lib/supabase.js").then((module) => module.supabase);
+  }
+
+  return supabaseClientPromise;
+}
+
+
 
 function applyPaymentFilters(query, req) {
-  const { status, asset, date_from: dateFrom, date_to: dateTo, search } = req.query;
+  const { status, asset, date_from: dateFrom, date_to: dateTo, search } = req.query || {};
+  const { created_after: createdAfter, created_before: createdBefore } = req.query || {};
 
   if (typeof status === "string" && status.length > 0) {
     query = query.eq("status", status);
   }
-
   if (typeof asset === "string" && asset.length > 0) {
     query = query.eq("asset", asset);
   }
-
   if (typeof dateFrom === "string" && dateFrom.length > 0) {
     query = query.gte("created_at", `${dateFrom}T00:00:00.000Z`);
   }
-
   if (typeof dateTo === "string" && dateTo.length > 0) {
     query = query.lte("created_at", `${dateTo}T23:59:59.999Z`);
   }
 
-  if (typeof search === "string" && search.trim().length > 0) {
-    const term = search.trim().replaceAll(",", "\\,");
-    query = query.or(
-      `id.ilike.%${term}%,description.ilike.%${term}%,recipient.ilike.%${term}%`,
-    );
+  if (typeof createdAfter === "string" && createdAfter.length > 0) {
+    query = query.gte("created_at", createdAfter);
   }
 
+  if (typeof createdBefore === "string" && createdBefore.length > 0) {
+    query = query.lte("created_at", createdBefore);
+  }
+  if (typeof search === "string" && search.trim().length > 0) {
+    const term = search.trim().replaceAll(",", "\\,");
+    let orQuery = `id.ilike.%${term}%,description.ilike.%${term}%,recipient.ilike.%${term}%`;
+    const numTerm = Number(term);
+    if (!isNaN(numTerm)) {
+      orQuery += `,amount.eq.${numTerm}`;
+    }
+    query = query.or(orQuery);
+  }
+  return query;
+}
+
+/**
+ * Parse `metadata[key]=value` query params and apply JSONB equality filters.
+ *
+ * Each `metadata[key]` entry is translated to a Supabase `.filter()` call
+ * using the `cs` (contains) operator against a single-key JSON object, which
+ * maps to the Postgres `@>` operator on a JSONB column.
+ *
+ * Only safe key names (alphanumeric + _ + -) are accepted to guard against
+ * SQL injection.
+ */
+const SAFE_METADATA_KEY_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+
+function applyMetadataFilters(query, rawQuery) {
+  const metadataParam = rawQuery.metadata;
+  if (!metadataParam || typeof metadataParam !== "object" || Array.isArray(metadataParam)) {
+    return query;
+  }
+  for (const [key, value] of Object.entries(metadataParam)) {
+    if (!SAFE_METADATA_KEY_RE.test(key)) continue;
+    if (typeof value !== "string") continue;
+    query = query.filter("metadata", "cs", JSON.stringify({ [key]: value }));
+  }
   return query;
 }
 
@@ -78,95 +149,114 @@ function createPaymentsRouter({
   /**
    * @swagger
    * /api/create-payment:
-   * post:
-   * summary: Create a new payment session request
-   * tags: [Payments]
-   * parameters:
-   * - in: header
-   * name: Idempotency-Key
-   * schema:
-   * type: string
-   * description: Optional unique key for idempotent requests. Use UUID or request ID. Responses are cached for 24 hours.
-   * requestBody:
-   * required: true
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * required: [amount, asset, recipient]
-   * properties:
-   * amount:
-   * type: number
-   * description: Payment amount (must be positive and at least 0.01 XLM for native payments)
-   * asset:
-   * type: string
-   * description: Asset code (e.g. XLM, USDC)
-   * asset_issuer:
-   * type: string
-   * description: Asset issuer (required for non-native assets)
-   * recipient:
-   * type: string
-   * description: Stellar address of the recipient
-   * merchant_id:
-   * type: string
-   * description:
-   * type: string
-   * memo:
-   * type: string
-   * memo_type:
-   * type: string
-   * enum: [text, id, hash, return]
-   * webhook_url:
-   * type: string
-   * branding_overrides:
-   * type: object
-   * properties:
-   * primary_color:
-   * type: string
-   * example: "#5ef2c0"
-   * secondary_color:
-   * type: string
-   * example: "#b8ffe2"
-   * background_color:
-   * type: string
-   * example: "#050608"
-   * responses:
-   * 201:
-   * description: Payment created
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * payment_id:
-   * type: string
-   * payment_link:
-   * type: string
-   * status:
-   * type: string
-   * branding_config:
-   * type: object
-   * 200:
-   * description: Duplicate request — cached response returned from idempotency key
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * payment_id:
-   * type: string
-   * payment_link:
-   * type: string
-   * status:
-   * type: string
-   * 400:
-   * description: Validation error or invalid Idempotency-Key
-   * 429:
-   * description: Too many requests
+   *   post:
+   *     summary: Create a new payment session request
+   *     tags: [Payments]
+   *     parameters:
+   *       - in: header
+   *         name: Idempotency-Key
+   *         schema:
+   *           type: string
+   *         description: Optional unique key for idempotent requests. Use UUID or request ID. Responses are cached for 24 hours.
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [amount, asset, recipient]
+   *             properties:
+   *               amount:
+   *                 type: number
+   *                 description: Payment amount (must be positive and at least 0.01 XLM for native payments)
+   *               asset:
+   *                 type: string
+   *                 description: Asset code (e.g. XLM, USDC)
+   *               asset_issuer:
+   *                 type: string
+   *                 description: Asset issuer (optional for standard assets like USDC; PLUTO resolves these automatically)
+   *               recipient:
+   *                 type: string
+   *                 description: Stellar address of the recipient
+   *               description:
+   *                 type: string
+   *               memo:
+   *                 type: string
+   *               memo_type:
+   *                 type: string
+   *                 enum: [text, id, hash, return]
+   *               webhook_url:
+   *                 type: string
+   *               client_id:
+   *                 type: string
+   *                 description: Merchant-defined client/store identifier for segmentation
+   *               branding_overrides:
+   *                 type: object
+   *                 properties:
+   *                   primary_color:
+   *                     type: string
+   *                     example: "#5ef2c0"
+   *                   secondary_color:
+   *                     type: string
+   *                     example: "#b8ffe2"
+   *                   background_color:
+   *                     type: string
+   *                     example: "#050608"
+   *     responses:
+   *       201:
+   *         description: Payment created
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 payment_id:
+   *                   type: string
+   *                 payment_link:
+   *                   type: string
+   *                 status:
+   *                   type: string
+   *                 branding_config:
+   *                   type: object
+   *       200:
+   *         description: Duplicate request — cached response returned from idempotency key
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 payment_id:
+   *                   type: string
+   *                 payment_link:
+   *                   type: string
+   *                 status:
+   *                   type: string
+   *       400:
+   *         description: Validation error or invalid Idempotency-Key
+   *       429:
+   *         description: Too many requests
    */
   async function createSession(req, res, next) {
     try {
-      const body = parseVersionedPaymentBody(req);
+      const supabase = await getSupabaseClient();
+      const body = req.body;
+      const asset = body.asset?.toUpperCase();
+      const assetIssuer = resolveAssetIssuer(asset, body.asset_issuer);
+      logger.info({ merchantId: req.merchant?.id, amount: body.amount, asset: body.asset }, "DEBUG: createSession started");
+
+      if (asset !== "XLM" && !assetIssuer) {
+        paymentFailedCounter.inc({ asset: body.asset, reason: "missing_issuer" });
+        return res.status(400).json({
+          error: "asset_issuer is required for non-native assets",
+        });
+      }
+
+      if (asset !== "XLM" && !isValidStellarPublicKey(assetIssuer)) {
+        paymentFailedCounter.inc({ asset: body.asset, reason: "invalid_issuer" });
+        return res.status(400).json({
+          error: "asset_issuer must be a valid Stellar public key",
+        });
+      }
 
       // Per-asset payment limit validation (#153)
       const limits = req.merchant.payment_limits;
@@ -195,8 +285,8 @@ function createPaymentsRouter({
       // Allowed-issuers check: if the merchant has configured a non-empty
       // allowlist, only those issuer addresses may be used.
       const allowedIssuers = req.merchant.allowed_issuers;
-      if (Array.isArray(allowedIssuers) && allowedIssuers.length > 0) {
-        if (!body.asset_issuer || !allowedIssuers.includes(body.asset_issuer)) {
+      if (asset !== "XLM" && Array.isArray(allowedIssuers) && allowedIssuers.length > 0) {
+        if (!assetIssuer || !allowedIssuers.includes(assetIssuer)) {
           paymentFailedCounter.inc({ asset: body.asset, reason: "invalid_issuer" });
           return res.status(400).json({
             error:
@@ -205,7 +295,9 @@ function createPaymentsRouter({
         }
       }
 
-      const paymentId = randomUUID();
+      const isSandbox = body.sandbox === true;
+      const baseId = randomUUID();
+      const paymentId = isSandbox ? `test_${baseId}` : baseId;
       const now = new Date().toISOString();
       const paymentLinkBase =
         process.env.PAYMENT_LINK_BASE || "http://localhost:3000";
@@ -225,16 +317,18 @@ function createPaymentsRouter({
         id: paymentId,
         merchant_id: req.merchant.id,
         amount: body.amount,
-        asset: body.asset,
-        asset_issuer: body.asset_issuer || null,
+        asset,
+        asset_issuer: assetIssuer || null,
         recipient: body.recipient,
         description: body.description || null,
-        memo: body.memo || null,
-        memo_type: body.memo_type || null,
+        memo: body.message || body.memo || null,
+        memo_type: body.message ? "text" : (body.memo_type || null),
         webhook_url: body.webhook_url || null,
+        client_id: body.client_id || null,
         status: "pending",
         tx_id: null,
         metadata,
+        sandbox: isSandbox,
         created_at: now,
       };
 
@@ -247,138 +341,37 @@ function createPaymentsRouter({
         throw insertError;
       }
 
-      // Record metric for payment creation
-      paymentCreatedCounter.inc({ asset: body.asset });
+      // Only record production metrics for non-sandbox payments.
+      if (!isSandbox) {
+        paymentCreatedCounter.inc({ asset: body.asset });
+      }
 
+      logger.info({ paymentId: paymentId }, "DEBUG: createSession success");
       res.status(201).json({
         payment_id: paymentId,
         payment_link: paymentLink,
         status: "pending",
+        sandbox: isSandbox,
         branding_config: resolvedBrandingConfig,
       });
     } catch (err) {
+      logger.error({ err, merchantId: req.merchant?.id }, "DEBUG: createSession error");
+      if (err.status === 400 && err.details) {
+        return res.status(400).json({ error: err.message, ...err.details });
+      }
       next(err);
     }
   }
 
-  router.post("/create-payment", createPaymentRateLimit, createSession);
-  router.post("/sessions", createPaymentRateLimit, createSession);
+  router.post("/create-payment", createPaymentRateLimit, recaptchaMiddleware(), validateRequest({ body: paymentSessionZodSchema }), sanitizeMetadataMiddleware, createSession);
+  router.post("/sessions", createPaymentRateLimit, validateRequest({ body: paymentSessionZodSchema }), sanitizeMetadataMiddleware, createSession);
+  router.post("/support-transactions", createPaymentRateLimit, validateRequest({ body: paymentZodSchema }), sanitizeMetadataMiddleware, createSession);
 
   /**
    * @swagger
    * /api/payment-status/{id}:
-   * get:
-   * summary: Get the status of a payment
-   * tags: [Payments]
-   * parameters:
-   * - in: path
-   * name: id
-   * required: true
-   * schema:
-   * type: string
-   * description: Payment ID
-   * responses:
-   * 200:
-   * description: Payment details
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * payment:
-   * type: object
-   * 404:
-   * description: Payment not found
-   */
-  router.get(
-    "/payment-status/:id",
-    validateUuidParam(),
-    async (req, res, next) => {
-      try {
-        // --- Redis read-through cache ---
-        const redis = await connectRedisClient();
-        const cached = await getCachedPayment(redis, req.params.id);
-        if (cached) {
-          return res.json({ payment: cached });
-        }
-
-        const { data, error } = await supabase
-        let query = supabase
-          .from("payments")
-          .select(
-            "id, amount, asset, asset_issuer, recipient, description, memo, memo_type, status, tx_id, metadata, created_at, merchants(branding_config)"
-          );
-
-        if (req.merchant?.id) {
-          query = query.eq("merchant_id", req.merchant.id);
-        }
-
-        const { data, error } = await query
-          .eq("id", req.params.id)
-          .is("deleted_at", null)
-          .maybeSingle();
-
-        if (error) {
-          error.status = 500;
-          throw error;
-        }
-
-        if (!data) {
-          return res.status(404).json({ error: "Payment not found" });
-        }
-
-        const metadataBranding = data.metadata?.branding_config || null;
-        const merchantBranding = data.merchants?.branding_config || null;
-        const brandingConfig = metadataBranding || merchantBranding || null;
-
-        const response = {
-          ...data,
-          branding_config: brandingConfig,
-        };
-        delete response.merchants;
-
-        // Cache the result for ~2 s to absorb polling bursts
-        await setCachedPayment(redis, req.params.id, response);
-
-        res.json({ payment: response });
-      } catch (err) {
-        next(err);
-      }
-    }
-  );
-
-  /**
-   * @swagger
-   * /api/verify-payment/{id}:
-   * post:
-   * summary: Verify a payment on the Stellar network
-   * tags: [Payments]
-   * parameters:
-   * - in: path
-   * name: id
-   * required: true
-   * schema:
-   * type: string
-   * description: Payment ID
-   * responses:
-   * 200:
-   * description: Verification result
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * status:
-   * type: string
-   * enum: [pending, confirmed]
-   * tx_id:
-   * type: string
-   * webhook:
-   * type: object
-   * 404:
-   * description: Payment not found
-   *   post:
-   *     summary: Verify a payment on the Stellar network
+   *   get:
+   *     summary: Get the status of a payment
    *     tags: [Payments]
    *     parameters:
    *       - in: path
@@ -389,21 +382,170 @@ function createPaymentsRouter({
    *         description: Payment ID
    *     responses:
    *       200:
-   *         description: Verification result
+   *         description: Payment details
    *         content:
    *           application/json:
    *             schema:
    *               type: object
    *               properties:
-   *                 status:
-   *                   type: string
-   *                   enum: [pending, confirmed]
-   *                 tx_id:
-   *                   type: string
-   *                 webhook:
+   *                 payment:
    *                   type: object
    *       404:
    *         description: Payment not found
+   */
+  router.get(
+    "/payment-status/:id",
+    validateUuidParam(),
+    async (req, res, next) => {
+      try {
+        const supabase = await getSupabaseClient();
+        // --- Redis read-through cache ---
+        const redis = await connectRedisClient();
+        const cached = await getCachedPayment(redis, req.params.id);
+        if (cached) {
+          return res.json({ payment: cached });
+        }
+
+        const baseFields =
+          "id, merchant_id, amount, asset, asset_issuer, recipient, description, memo, memo_type, status, tx_id, metadata, created_at";
+        const withMerchantJoin = `${baseFields}, merchants(branding_config)`;
+
+        const runPaymentQuery = async ({ includeJoin, includeDeletedFilter }) => {
+          let query = supabase
+            .from("payments")
+            .select(includeJoin ? withMerchantJoin : baseFields);
+
+          if (req.merchant?.id) {
+            query = query.eq("merchant_id", req.merchant.id);
+          }
+
+          query = query.eq("id", req.params.id);
+          if (includeDeletedFilter) {
+            query = query.is("deleted_at", null);
+          }
+
+          const { data, error } = await query.maybeSingle();
+          return { data, error, includeJoin };
+        };
+
+        // Schema-tolerant fallback order for local/dev databases:
+        // 1) join + deleted_at filter (latest schema)
+        // 2) join only
+        // 3) base fields + deleted_at filter
+        // 4) base fields only
+        const attempts = [
+          { includeJoin: true, includeDeletedFilter: true },
+          { includeJoin: true, includeDeletedFilter: false },
+          { includeJoin: false, includeDeletedFilter: true },
+          { includeJoin: false, includeDeletedFilter: false },
+        ];
+
+        let data = null;
+        let queryError = null;
+        let usedJoin = false;
+        for (const attempt of attempts) {
+          const result = await runPaymentQuery(attempt);
+          if (!result.error) {
+            data = result.data;
+            usedJoin = result.includeJoin;
+            queryError = null;
+            break;
+          }
+          queryError = result.error;
+        }
+
+        if (queryError) {
+          queryError.status = 500;
+          throw queryError;
+        }
+
+        if (!data) {
+          return res.status(404).json({ error: "Payment not found" });
+        }
+
+        const metadataBranding = data.metadata?.branding_config || null;
+        let merchantBranding = usedJoin ? data.merchants?.branding_config || null : null;
+        if (!merchantBranding && data.merchant_id) {
+          const { data: merchantData } = await supabase
+            .from("merchants")
+            .select("branding_config")
+            .eq("id", data.merchant_id)
+            .maybeSingle();
+          merchantBranding = merchantData?.branding_config || null;
+        }
+        const brandingConfig = metadataBranding || merchantBranding || null;
+
+        const response = {
+          ...data,
+          branding_config: brandingConfig,
+        };
+        delete response.merchants;
+
+        // Only cache confirmed/completed payments — never cache pending
+        // so status changes are immediately visible to pollers
+        if (data.status === "confirmed" || data.status === "completed") {
+          await setCachedPayment(redis, req.params.id, response);
+        }
+
+        // Prevent HTTP-level caching so 304 responses never mask status changes
+        res.setHeader("Cache-Control", "no-store");
+        res.json({ payment: response });
+      } catch (err) {
+        next(err);
+      }
+    }
+  );
+
+  /**
+   * @swagger
+   * /api/stream/{id}:
+   *   get:
+   *     summary: Subscribe to real-time status updates for a payment
+   *     tags: [Payments]
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Payment ID
+   *     responses:
+   *       200:
+   *         description: SSE stream
+   */
+  router.get("/stream/:id", validateUuidParam(), (req, res) => {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    streamManager.addClient(req.params.id, res);
+  });
+
+  router.get("/network-fee", async (req, res, next) => {
+    try {
+      const fee = await getNetworkFeeStats(1);
+      res.json({
+        network_fee: {
+          network: fee.network,
+          horizon_url: fee.horizonUrl,
+          operation_count: fee.operationCount,
+          stroops: fee.totalFeeStroops,
+          xlm: fee.totalFeeXlm,
+          last_ledger_base_fee: fee.lastLedgerBaseFee,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * @swagger
+   * /api/verify-payment/{id}:
+   *   post:
+   *     summary: Verify a payment on the Stellar network
+   *     tags: [Payments]
    */
   router.post(
     "/verify-payment/:id",
@@ -411,20 +553,24 @@ function createPaymentsRouter({
     validateUuidParam(),
     async (req, res, next) => {
       try {
+        const supabase = await getSupabaseClient();
         let query = supabase
           .from("payments")
           .select(
-  "id, merchant_id, amount, asset, asset_issuer, recipient, status, tx_id, memo, memo_type, webhook_url, merchants(webhook_secret, webhook_version, notification_email, email)"
-);
+            "id, merchant_id, amount, asset, asset_issuer, recipient, status, tx_id, memo, memo_type, webhook_url, metadata, created_at, merchants(webhook_secret, webhook_version, webhook_custom_headers, notification_email, email, business_name, subscribed_events)"
+          );
 
         if (req.merchant?.id) {
           query = query.eq("merchant_id", req.merchant.id);
         }
 
         const { data, error } = await query
+
           .eq("id", req.params.id)
           .is("deleted_at", null)
           .maybeSingle();
+
+        console.log("DEBUG: Supabase query finished. data exists:", !!data, "error:", !!error);
 
         if (error) {
           error.status = 500;
@@ -450,24 +596,138 @@ function createPaymentsRouter({
           assetIssuer: data.asset_issuer,
           memo: data.memo,
           memoType: data.memo_type,
+          createdAt: data.created_at,
         });
 
+        if (match) {
+          const signatureResult = await verifyTransactionSignatureIfAvailable(match.transaction_hash);
+          if (!isSignatureVerificationAccepted(signatureResult)) {
+            return res.json({ status: "pending" });
+          }
+        }
+
         if (!match) {
+          // Check if a payment arrived but with the wrong amount
+          console.log("DEBUG: No match found, calling findAnyRecentPayment");
+          const anyPayment = await findAnyRecentPayment({
+            recipient: data.recipient,
+            assetCode: data.asset,
+            assetIssuer: data.asset_issuer,
+            createdAt: data.created_at,
+          });
+          console.log("DEBUG: findAnyRecentPayment finished. anyPayment exists:", !!anyPayment);
+
+          if (anyPayment) {
+            const received = Number(anyPayment.received_amount);
+            const expected = Number(data.amount);
+            const diff = received - expected;
+
+            if (diff < -0.0000001) {
+              // Underpayment — mark as failed with details
+              await supabase.from("payments").update({
+                status: "failed",
+                tx_id: anyPayment.transaction_hash,
+                metadata: {
+                  ...(data.metadata || {}),
+                  failure_reason: "underpayment",
+                  expected_amount: expected,
+                  received_amount: received,
+                  shortfall: Number((expected - received).toFixed(7)),
+                },
+              }).eq("id", data.id);
+
+              const redis = await connectRedisClient();
+              await invalidatePaymentCache(redis, data.id);
+
+              return res.status(402).json({
+                status: "failed",
+                reason: "underpayment",
+                expected_amount: expected,
+                received_amount: received,
+                shortfall: Number((expected - received).toFixed(7)),
+                tx_id: anyPayment.transaction_hash,
+                message: `Payment received but amount was too low. Expected ${expected} ${data.asset}, received ${received} ${data.asset}.`,
+              });
+            }
+
+            if (diff > 0.0000001) {
+              // Overpayment — still confirm but flag it
+              const createdAt = new Date(data.created_at);
+              const latencySeconds = (new Date() - createdAt) / 1000;
+
+              await supabase.from("payments").update({
+                status: "confirmed",
+                tx_id: anyPayment.transaction_hash,
+                completion_duration_seconds: Math.floor(latencySeconds),
+                metadata: {
+                  ...(data.metadata || {}),
+                  overpayment: true,
+                  expected_amount: expected,
+                  received_amount: received,
+                  excess: Number((received - expected).toFixed(7)),
+                },
+              }).eq("id", data.id);
+
+              const redis = await connectRedisClient();
+              await invalidatePaymentCache(redis, data.id);
+
+              return res.json({
+                status: "confirmed",
+                tx_id: anyPayment.transaction_hash,
+                overpayment: true,
+                expected_amount: expected,
+                received_amount: received,
+                excess: Number((received - expected).toFixed(7)),
+                message: `Payment confirmed. Note: overpayment of ${Number((received - expected).toFixed(7))} ${data.asset} received.`,
+              });
+            }
+          }
+
           return res.json({ status: "pending" });
         }
 
-        const { error: updateError } = await supabase
+        // Guard: use a DB-level conditional update to prevent race conditions
+        // where two concurrent requests confirm the same tx_hash on different payments.
+        // Only update if tx_id is still NULL (not yet claimed by another payment).
+        const { data: existing } = await supabase
           .from("payments")
-          .update({ 
-            status: "confirmed", 
+          .select("id")
+          .eq("tx_id", match.transaction_hash)
+          .neq("id", data.id)
+          .maybeSingle();
+
+        if (existing) {
+          return res.json({ status: "pending" });
+        }
+
+        // Calculate latency from creation to confirmation
+        const createdAt = new Date(data.created_at);
+        const now = new Date();
+        const latencySeconds = (now - createdAt) / 1000;
+
+        const { data: updated, error: updateError } = await supabase
+          .from("payments")
+          .update({
+            status: "confirmed",
             tx_id: match.transaction_hash,
             completion_duration_seconds: Math.floor(latencySeconds)
           })
-          .eq("id", data.id);
+          .eq("id", data.id)
+          .eq("status", "pending")
+          .is("tx_id", null)   // atomic claim — only if not already taken
+          .select("id")
+          .maybeSingle();
 
         if (updateError) {
+          if (updateError.code === "23505") {
+            return res.json({ status: "pending" }); // another payment claimed this tx
+          }
           updateError.status = 500;
           throw updateError;
+        }
+
+        if (!updated) {
+          return res.json({ status: "pending" }); // already processed
         }
 
         // --- Invalidate cache so next poll sees confirmed status immediately ---
@@ -475,14 +735,10 @@ function createPaymentsRouter({
         await invalidatePaymentCache(redis, data.id);
         // Record metrics for confirmation
         paymentConfirmedCounter.inc({ asset: data.asset });
-
-        // Calculate latency from creation to confirmation
-        const createdAt = new Date(data.created_at);
-        const now = new Date();
-        const latencySeconds = (now - createdAt) / 1000;
         paymentConfirmationLatency.observe({ asset: data.asset }, latencySeconds);
 
         // Emit real-time event to the merchant's private room (issue #229)
+        console.log("DEBUG: confirmed logic started. ID:", data.id);
         const io = req.app.locals.io;
         if (io && data.merchant_id) {
           io.to(`merchant:${data.merchant_id}`).emit("payment:confirmed", {
@@ -496,28 +752,38 @@ function createPaymentsRouter({
           });
         }
 
-       const merchantSecret = data.merchants?.webhook_secret;
-const merchantVersion = data.merchants?.webhook_version || "v1";
+        // Notify customer via SSE (issue #89)
+        console.log("DEBUG: Calling streamManager.notify");
+        streamManager.notify(data.id, "payment.confirmed", {
+          status: "confirmed",
+          tx_id: match.transaction_hash,
+        });
 
-const webhookPayload = getPayloadForVersion(
-  merchantVersion,
-  "payment.confirmed",
-  {
-    payment_id: data.id,
-    amount: data.amount,
-    asset: data.asset,
-    asset_issuer: data.asset_issuer,
-    recipient: data.recipient,
-    tx_id: match.transaction_hash,
-  }
-);
+        const merchantSecret = data.merchants?.webhook_secret;
+        const merchantVersion = data.merchants?.webhook_version || "v1";
 
-const webhookResult = await sendWebhook(
-  data.webhook_url,
-  webhookPayload,
-  merchantSecret
-);
-
+        const webhookPayload = getPayloadForVersion(
+          merchantVersion,
+          "payment.confirmed",
+          {
+            payment_id: data.id,
+            amount: data.amount,
+            asset: data.asset,
+            asset_issuer: data.asset_issuer,
+            recipient: data.recipient,
+            tx_id: match.transaction_hash,
+          }
+        );
+        let webhookResult = { ok: true, skipped: true };
+        if (isEventSubscribed(data.merchants, "payment.confirmed")) {
+          webhookResult = await sendWebhook(
+            data.webhook_url,
+            webhookPayload,
+            merchantSecret,
+            data.id,
+            data.merchants?.webhook_custom_headers ?? {}
+          );
+        }
         if (!webhookResult.ok && !webhookResult.skipped) {
           console.warn("Webhook failed", webhookResult);
         }
@@ -556,6 +822,7 @@ const webhookResult = await sendWebhook(
           webhook: webhookResult,
         });
       } catch (err) {
+        console.error("VERIFY_ROUTE_ERROR:", err);
         next(err);
       }
     }
@@ -564,98 +831,68 @@ const webhookResult = await sendWebhook(
   /**
    * @swagger
    * /api/payments:
-   * get:
-   * summary: Get paginated list of payments for the authenticated merchant
-   * tags: [Payments]
-   * security:
-   * - ApiKeyAuth: []
-   * parameters:
-   * - in: query
-   * name: page
-   * schema:
-   * type: integer
-   * default: 1
-   * description: Page number (1-indexed)
-   * - in: query
-   * name: limit
-   * schema:
-   * type: integer
-   * default: 10
-   * description: Number of results per page (max 100)
-   * responses:
-   * 200:
-   * description: Paginated payments
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * payments:
-   * type: array
-   * items:
-   * type: object
-   * total_count:
-   * type: integer
-   * total_pages:
-   * type: integer
-   * page:
-   * type: integer
-   * limit:
-   * type: integer
-   * 401:
-   * description: Missing or invalid API key
+   *   get:
+   *     summary: Get paginated list of payments for the authenticated merchant
+   *     tags: [Payments]
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: query
+   *         name: page
+   *         schema:
+   *           type: integer
+   *           default: 1
+   *         description: Page number (1-indexed)
+   *       - in: query
+   *         name: limit
+   *         schema:
+   *           type: integer
+   *           default: 10
+   *         description: Number of results per page (max 100)
+   *       - in: query
+   *         name: client_id
+   *         schema:
+   *           type: string
+   *         description: Filter payments by merchant-defined client identifier
+   *     responses:
+   *       200:
+   *         description: Paginated payments
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 payments:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *                 total_count:
+   *                   type: integer
+   *                 total_pages:
+   *                   type: integer
+   *                 page:
+   *                   type: integer
+   *                 limit:
+   *                   type: integer
+   *                 links:
+   *                   type: object
+   *                   properties:
+   *                     next:
+   *                       type: string
+   *                       description: URL to the next page
+   *                     previous:
+   *                       type: string
+   *                       description: URL to the previous page
+   *       401:
+   *         description: Missing or invalid API key
    */
-  router.get("/payments", async (req, res, next) => {
+  router.get("/payments", validateRequest({ query: paymentsListQuerySchema }), async (req, res, next) => {
     try {
-      let page = parseInt(req.query.page, 10) || 1;
-      let limit = parseInt(req.query.limit, 10) || 10;
-
-      if (page < 1) page = 1;
-      if (limit < 1) limit = 1;
-      if (limit > 100) limit = 100;
-
-      const offset = (page - 1) * limit;
-
-      let countQuery = supabase
-        .from("payments")
-        .select("*", { count: "exact", head: true })
-        .eq("merchant_id", req.merchant.id);
-
-      countQuery = applyPaymentFilters(countQuery, req);
-
-      const { count: totalCount, error: countError } = await countQuery;
-
-      if (countError) {
-        countError.status = 500;
-        throw countError;
-      }
-
-      let dataQuery = supabase
-        .from("payments")
-        .select(
-          "id, amount, asset, asset_issuer, recipient, description, status, tx_id, created_at"
-        )
-        .eq("merchant_id", req.merchant.id);
-
-      dataQuery = applyPaymentFilters(dataQuery, req);
-
-      const { data: payments, error: dataError } = await dataQuery
-        .order("created_at", { ascending: false })
-        .range(offset, offset + limit - 1);
-
-      if (dataError) {
-        dataError.status = 500;
-        throw dataError;
-      }
-
-      const totalPages = Math.ceil(totalCount / limit);
+      const result = await paymentService.getMerchantPayments(req.merchant.id, req.query);
 
       res.json({
-        payments: payments || [],
-        total_count: totalCount,
-        total_pages: totalPages,
-        page,
-        limit,
+        ...result,
+        ...generatePaginationLinks(req, result.page, result.limit, result.total_pages),
       });
     } catch (err) {
       next(err);
@@ -665,102 +902,46 @@ const webhookResult = await sendWebhook(
   /**
    * @swagger
    * /api/metrics/7day:
-   * get:
-   * summary: Get 7-day rolling payment volume metrics
-   * tags: [Metrics]
-   * security:
-   * - ApiKeyAuth: []
-   * responses:
-   * 200:
-   * description: Daily volume data for past 7 days
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * data:
-   * type: array
-   * items:
-   * type: object
-   * properties:
-   * date:
-   * type: string
-   * description: Date in YYYY-MM-DD format
-   * volume:
-   * type: number
-   * description: Total payment amount for that day
-   * count:
-   * type: integer
-   * description: Number of payments on that day
-   * total_volume:
-   * type: number
-   * description: Total volume across all 7 days
-   * total_payments:
-   * type: integer
-   * description: Total payment count across all 7 days
-   * 401:
-   * description: Missing or invalid API key
+   *   get:
+   *     summary: Get 7-day rolling payment volume metrics
+   *     tags: [Metrics]
+   *     security:
+   *       - ApiKeyAuth: []
+   *     responses:
+   *       200:
+   *         description: Daily volume data for past 7 days
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 data:
+   *                   type: array
+   *                   items:
+   *                     type: object
+   *                     properties:
+   *                       date:
+   *                         type: string
+   *                         description: Date in YYYY-MM-DD format
+   *                       volume:
+   *                         type: number
+   *                         description: Total payment amount for that day
+   *                       count:
+   *                         type: integer
+   *                         description: Number of payments on that day
+   *                 total_volume:
+   *                   type: number
+   *                   description: Total volume across all 7 days
+   *                 total_payments:
+   *                   type: integer
+   *                   description: Total payment count across all 7 days
+   *       401:
+   *         description: Missing or invalid API key
    */
   router.get("/metrics/7day", async (req, res, next) => {
     try {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-      const { data: payments, error } = await supabase
-        .from("payments")
-        .select("amount, created_at, status")
-        .eq("merchant_id", req.merchant.id)
-        .gte("created_at", sevenDaysAgo.toISOString())
-        .order("created_at", { ascending: true });
-
-      if (error) {
-        error.status = 500;
-        throw error;
-      }
-
-      const metricsMap = new Map();
-      let totalVolume = 0;
-
-      payments.forEach((payment) => {
-        const date = new Date(payment.created_at).toISOString().split("T")[0];
-        const volume = Number(payment.amount) || 0;
-
-        if (!metricsMap.has(date)) {
-          metricsMap.set(date, { date, volume: 0, count: 0 });
-        }
-
-        const dayMetric = metricsMap.get(date);
-        dayMetric.volume += volume;
-        dayMetric.count += 1;
-        totalVolume += volume;
-      });
-
-      const data = [];
-      for (let i = 6; i >= 0; i -= 1) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split("T")[0];
-
-        if (metricsMap.has(dateStr)) {
-          data.push(metricsMap.get(dateStr));
-        } else {
-          data.push({ date: dateStr, volume: 0, count: 0 });
-        }
-      }
-
-      const confirmedCount = payments.filter((p) => p.status === "confirmed").length;
-      const successRate =
-        payments.length > 0
-          ? Number(((confirmedCount / payments.length) * 100).toFixed(1))
-          : 0;
-
-      res.json({
-        data,
-        total_volume: Number(totalVolume.toFixed(2)),
-        total_payments: payments.length,
-        confirmed_count: confirmedCount,
-        success_rate: successRate,
-      });
+      const result = await paymentService.getRollingMetrics(req.merchant.id);
+      res.json(result);
     } catch (err) {
       next(err);
     }
@@ -769,118 +950,46 @@ const webhookResult = await sendWebhook(
   /**
    * @swagger
    * /api/payments/{id}/refund:
-   * post:
-   * summary: Generate a refund transaction for a confirmed payment
-   * tags: [Payments]
-   * security:
-   * - ApiKeyAuth: []
-   * parameters:
-   * - in: path
-   * name: id
-   * required: true
-   * schema:
-   * type: string
-   * description: Payment ID
-   * responses:
-   * 200:
-   * description: Refund transaction XDR
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * xdr:
-   * type: string
-   * description: Transaction XDR to sign and submit
-   * hash:
-   * type: string
-   * description: Transaction hash
-   * instructions:
-   * type: string
-   * 400:
-   * description: Payment not eligible for refund
-   * 404:
-   * description: Payment not found
+   *   post:
+   *     summary: Generate a refund transaction for a confirmed payment
+   *     tags: [Payments]
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Payment ID
+   *     responses:
+   *       200:
+   *         description: Refund transaction XDR
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 xdr:
+   *                   type: string
+   *                   description: Transaction XDR to sign and submit
+   *                 hash:
+   *                   type: string
+   *                   description: Transaction hash
+   *                 instructions:
+   *                   type: string
+   *       400:
+   *         description: Payment not eligible for refund
+   *       404:
+   *         description: Payment not found
    */
   router.post(
     "/payments/:id/refund",
     validateUuidParam(),
     async (req, res, next) => {
       try {
-        const { data: payment, error } = await supabase
-          .from("payments")
-          .select(
-            "id, merchant_id, amount, asset, asset_issuer, recipient, status, tx_id, metadata"
-          )
-          .eq("id", req.params.id)
-          .eq("merchant_id", req.merchant.id)
-          .maybeSingle();
-
-        if (error) {
-          error.status = 500;
-          throw error;
-        }
-
-        if (!payment) {
-          return res.status(404).json({ error: "Payment not found" });
-        }
-
-        if (payment.status !== "confirmed") {
-          return res.status(400).json({
-            error: "Only confirmed payments can be refunded",
-          });
-        }
-
-        if (payment.metadata?.refund_status === "refunded") {
-          return res.status(400).json({
-            error: "Payment already refunded",
-          });
-        }
-
-        const StellarSdk = await import("stellar-sdk");
-        const HORIZON_URL =
-          process.env.STELLAR_HORIZON_URL ||
-          (process.env.STELLAR_NETWORK === "public"
-            ? "https://horizon.stellar.org"
-            : "https://horizon-testnet.stellar.org");
-
-        const server = new StellarSdk.Horizon.Server(HORIZON_URL);
-        const tx = await server
-          .transactions()
-          .transaction(payment.tx_id)
-          .call();
-
-        const refundDestination = tx.source_account;
-
-        const refundTx = await createRefundTransaction({
-          sourceAccount: payment.recipient,
-          destination: refundDestination,
-          amount: payment.amount,
-          assetCode: payment.asset,
-          assetIssuer: payment.asset_issuer,
-          memo: `Refund: ${payment.id.substring(0, 8)}`,
-        });
-
-        await supabase
-          .from("payments")
-          .update({
-            metadata: {
-              ...payment.metadata,
-              refund_status: "pending",
-              refund_xdr: refundTx.xdr,
-              refund_created_at: new Date().toISOString(),
-            },
-          })
-          .eq("id", payment.id);
-
-        res.json({
-          xdr: refundTx.xdr,
-          hash: refundTx.hash,
-          refund_amount: payment.amount,
-          refund_destination: refundDestination,
-          instructions:
-            "Sign this transaction with your merchant wallet and submit to Stellar network. Then call POST /api/payments/:id/refund/confirm with the transaction hash.",
-        });
+        const result = await paymentService.generateRefundTx(req.params.id, req.merchant.id);
+        res.json(result);
       } catch (err) {
         next(err);
       }
@@ -890,45 +999,43 @@ const webhookResult = await sendWebhook(
   /**
    * @swagger
    * /api/payments/{id}/refund/confirm:
-   * post:
-   * summary: Confirm a refund transaction has been submitted
-   * tags: [Payments]
-   * security:
-   * - ApiKeyAuth: []
-   * parameters:
-   * - in: path
-   * name: id
-   * required: true
-   * schema:
-   * type: string
-   * description: Payment ID
-   * requestBody:
-   * required: true
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * required: [tx_hash]
-   * properties:
-   * tx_hash:
-   * type: string
-   * description: Submitted refund transaction hash
-   * responses:
-   * 200:
-   * description: Refund confirmed
-   * 404:
-   * description: Payment not found
+   *   post:
+   *     summary: Confirm a refund transaction has been submitted
+   *     tags: [Payments]
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Payment ID
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [tx_hash]
+   *             properties:
+   *               tx_hash:
+   *                 type: string
+   *                 description: Submitted refund transaction hash
+   *     responses:
+   *       200:
+   *         description: Refund confirmed
+   *       404:
+   *         description: Payment not found
    */
   router.post(
     "/payments/:id/refund/confirm",
     validateUuidParam(),
+    validateRequest({ body: refundConfirmSchema }),
     async (req, res, next) => {
       try {
         const { tx_hash } = req.body;
-
-        if (!tx_hash) {
-          return res.status(400).json({ error: "Transaction hash required" });
-        }
+        const supabase = await getSupabaseClient();
 
         const { data: payment, error } = await supabase
           .from("payments")
@@ -972,114 +1079,74 @@ const webhookResult = await sendWebhook(
   /**
    * @swagger
    * /api/anchor/sep24/deposit:
-   * post:
-   * summary: Initiate a SEP-0024 hosted deposit (fiat → Stellar token)
-   * description: >
-   * Starts an interactive deposit flow with a Stellar anchor (e.g. Circle,
-   * MoneyGram). Returns a URL the frontend should open in a popup — the anchor
-   * hosts the deposit form, so no bank details are ever sent to this API.
-   * tags: [Anchor / SEP-0024]
-   * security:
-   * - ApiKeyAuth: []
-   * requestBody:
-   * required: true
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * required: [asset_code, account]
-   * properties:
-   * asset_code:
-   * type: string
-   * description: Stellar asset code to deposit (e.g. USDC, EURC)
-   * example: USDC
-   * account:
-   * type: string
-   * description: User's Stellar public key that will receive the tokens
-   * amount:
-   * type: number
-   * description: Optional pre-fill amount for the deposit form
-   * anchor_domain:
-   * type: string
-   * description: Anchor domain override (defaults to ANCHOR_DOMAIN env var)
-   * example: testanchor.stellar.org
-   * responses:
-   * 200:
-   * description: Interactive deposit URL from the anchor
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * type:
-   * type: string
-   * example: interactive_customer_info_needed
-   * url:
-   * type: string
-   * description: Open this URL in a popup for the user to complete the deposit
-   * id:
-   * type: string
-   * description: Anchor transaction ID — use this to poll /anchor/sep24/transaction/:id
-   * anchor_domain:
-   * type: string
-   * 400:
-   * description: Missing required fields
-   * 500:
-   * description: ANCHOR_DOMAIN not configured
-   * 502:
-   * description: Anchor request failed
-   * /api/path-payment-quote/{id}:
-   *   get:
-   *     summary: Get a path payment quote for a payment session
-   *     description: Returns the estimated send amount if the customer wants to pay with a different asset than the merchant expects.
-   *     tags: [Payments]
-   *     parameters:
-   *       - in: path
-   *         name: id
-   *         required: true
-   *         schema:
-   *           type: string
-   *         description: Payment ID
-   *       - in: query
-   *         name: source_asset
-   *         required: true
-   *         schema:
-   *           type: string
-   *         description: Asset code the customer wants to send (e.g. XLM)
-   *       - in: query
-   *         name: source_asset_issuer
-   *         schema:
-   *           type: string
-   *         description: Issuer of the source asset (required if not XLM)
-   *       - in: query
-   *         name: source_account
-   *         required: true
-   *         schema:
-   *           type: string
-   *         description: Customer's Stellar public key
+   *   post:
+   *     summary: Initiate a SEP-0024 hosted deposit (fiat → Stellar token)
+   *     description: >
+   *       Starts an interactive deposit flow with a Stellar anchor (e.g. Circle,
+   *       MoneyGram). Returns a URL the frontend should open in a popup — the anchor
+   *       hosts the deposit form, so no bank details are ever sent to this API.
+   *     tags: [Anchor / SEP-0024]
+   *     security:
+   *       - ApiKeyAuth: []
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [asset_code, account]
+   *             properties:
+   *               asset_code:
+   *                 type: string
+   *                 description: Stellar asset code to deposit (e.g. USDC, EURC)
+   *                 example: USDC
+   *               account:
+   *                 type: string
+   *                 description: User's Stellar public key that will receive the tokens
+   *               amount:
+   *                 type: number
+   *                 description: Optional pre-fill amount for the deposit form
+   *               anchor_domain:
+   *                 type: string
+   *                 description: Anchor domain override (defaults to ANCHOR_DOMAIN env var)
+   *                 example: testanchor.stellar.org
    *     responses:
    *       200:
-   *         description: Path payment quote
+   *         description: Interactive deposit URL from the anchor
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: object
+   *               properties:
+   *                 type:
+   *                   type: string
+   *                   example: interactive_customer_info_needed
+   *                 url:
+   *                   type: string
+   *                   description: Open this URL in a popup for the user to complete the deposit
+   *                 id:
+   *                   type: string
+   *                   description: Anchor transaction ID — use this to poll /anchor/sep24/transaction/:id
+   *                 anchor_domain:
+   *                   type: string
    *       400:
-   *         description: Missing parameters or same asset
-   *       404:
-   *         description: Payment not found or no path available
+   *         description: Missing required fields
+   *       500:
+   *         description: ANCHOR_DOMAIN not configured
+   *       502:
+   *         description: Anchor request failed
    */
   router.get(
     "/path-payment-quote/:id",
+    pathPaymentQuoteRateLimit,
     validateUuidParam(),
+    validateRequest({ query: pathPaymentQuoteQuerySchema }),
     async (req, res, next) => {
       try {
+        const supabase = await getSupabaseClient();
         const sourceAsset = req.query.source_asset;
         const sourceAssetIssuer = req.query.source_asset_issuer || null;
         const sourceAccount = req.query.source_account;
-
-        if (!sourceAsset || !sourceAccount) {
-          return res.status(400).json({
-            error:
-              "source_asset and source_account query parameters are required",
-          });
-        }
 
         let query = supabase
           .from("payments")
@@ -1091,6 +1158,7 @@ const webhookResult = await sendWebhook(
 
         const { data, error } = await query
           .eq("id", req.params.id)
+          .is("deleted_at", null)
           .maybeSingle();
 
         if (error) {
@@ -1098,75 +1166,20 @@ const webhookResult = await sendWebhook(
           throw error;
         }
 
-  /**
-   * @swagger
-   * /api/anchor/sep24/withdraw:
-   * post:
-   * summary: Initiate a SEP-0024 hosted withdrawal (Stellar token → fiat)
-   * description: >
-   * Starts an interactive withdrawal flow with a Stellar anchor. Returns a URL
-   * the frontend opens in a popup where the user enters their bank/cash-out details.
-   * tags: [Anchor / SEP-0024]
-   * security:
-   * - ApiKeyAuth: []
-   * requestBody:
-   * required: true
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * required: [asset_code, account]
-   * properties:
-   * asset_code:
-   * type: string
-   * description: Stellar asset code to withdraw (e.g. USDC, EURC)
-   * example: USDC
-   * account:
-   * type: string
-   * description: User's Stellar public key that holds the tokens
-   * amount:
-   * type: number
-   * description: Optional pre-fill amount for the withdrawal form
-   * anchor_domain:
-   * type: string
-   * description: Anchor domain override (defaults to ANCHOR_DOMAIN env var)
-   * responses:
-   * 200:
-   * description: Interactive withdrawal URL from the anchor
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * type:
-   * type: string
-   * example: interactive_customer_info_needed
-   * url:
-   * type: string
-   * description: Open this URL in a popup for the user to complete the withdrawal
-   * id:
-   * type: string
-   * description: Anchor transaction ID for polling
-   * anchor_domain:
-   * type: string
-   * 400:
-   * description: Missing required fields
-   * 500:
-   * description: ANCHOR_DOMAIN not configured
-   * 502:
-   * description: Anchor request failed
-   */
-  router.post("/anchor/sep24/withdraw", async (req, res, next) => {
-    try {
-      const { asset_code, account, amount, anchor_domain } = req.body;
         if (!data) {
           return res.status(404).json({ error: "Payment not found" });
         }
 
-        // No quote needed if customer is already paying with the right asset
+        if (data.status !== "pending") {
+          return res.status(409).json({
+            error: "Path payment quote is only available for pending payments",
+            status: data.status,
+          });
+        }
+
         const sameAsset =
           sourceAsset.toUpperCase() === data.asset.toUpperCase() &&
-          (sourceAssetIssuer || null) === (data.asset_issuer || null);
+          sourceAssetIssuer === (data.asset_issuer || null);
 
         if (sameAsset) {
           return res.status(400).json({
@@ -1174,8 +1187,6 @@ const webhookResult = await sendWebhook(
               "Source asset is the same as destination asset. Use a direct payment.",
           });
         }
-
-        const SLIPPAGE = 0.01; // 1%
 
         const quote = await findStrictReceivePaths({
           sourceAccount,
@@ -1192,6 +1203,7 @@ const webhookResult = await sendWebhook(
           });
         }
 
+        const SLIPPAGE = 0.01; // 1%
         const sendMax = (
           parseFloat(quote.source_amount) *
           (1 + SLIPPAGE)
@@ -1216,60 +1228,57 @@ const webhookResult = await sendWebhook(
 
   /**
    * @swagger
+   * /api/anchor/sep24/withdraw:
+   *   post:
+   *     summary: Initiate a SEP-0024 hosted withdrawal
+   *     tags: [Anchor / SEP-0024]
+   */
+  router.post("/anchor/sep24/withdraw", async (req, res, next) => {
+    try {
+      const { asset_code, account } = req.body || {};
+      if (!asset_code || !account) {
+        return res.status(400).json({
+          error: "asset_code and account are required",
+        });
+      }
+      return res.status(501).json({
+        error: "SEP-24 withdrawal is not enabled on this deployment",
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
+   * @swagger
    * /api/anchor/sep24/transaction/{id}:
-   * get:
-   * summary: Poll the status of a SEP-0024 anchor transaction
-   * description: >
-   * Fetches the current status of a deposit or withdrawal transaction from
-   * the anchor. Call this repeatedly after the user closes the popup to check
-   * whether the transaction has completed.
-   * tags: [Anchor / SEP-0024]
-   * security:
-   * - ApiKeyAuth: []
-   * parameters:
-   * - in: path
-   * name: id
-   * required: true
-   * schema:
-   * type: string
-   * description: Anchor transaction ID returned from /deposit or /withdraw
-   * - in: query
-   * name: anchor_domain
-   * schema:
-   * type: string
-   * description: Anchor domain override (defaults to ANCHOR_DOMAIN env var)
-   * responses:
-   * 200:
-   * description: Transaction object from the anchor
-   * content:
-   * application/json:
-   * schema:
-   * type: object
-   * properties:
-   * transaction:
-   * type: object
-   * properties:
-   * id:
-   * type: string
-   * status:
-   * type: string
-   * description: >
-   * One of: incomplete, pending_user_transfer_start,
-   * pending_anchor, pending_stellar, completed, error
-   * amount_in:
-   * type: string
-   * amount_out:
-   * type: string
-   * stellar_transaction_id:
-   * type: string
-   * more_info_url:
-   * type: string
-   * 400:
-   * description: Missing transaction ID
-   * 500:
-   * description: ANCHOR_DOMAIN not configured
-   * 502:
-   * description: Anchor request failed
+   *   get:
+   *     summary: Poll the status of a SEP-0024 anchor transaction
+   *     description: >
+   *       Fetches the current status of a deposit or withdrawal transaction
+   *       from an anchor.
+   *     tags: [Anchor / SEP-0024]
+   *     security:
+   *       - ApiKeyAuth: []
+   *     parameters:
+   *       - in: path
+   *         name: id
+   *         required: true
+   *         schema:
+   *           type: string
+   *         description: Anchor transaction ID returned from /deposit or /withdraw
+   *     responses:
+   *       501:
+   *         description: Endpoint is not enabled on this deployment
+   */
+  router.get("/anchor/sep24/transaction/:id", async (req, res) => {
+    return res.status(501).json({
+      error: "SEP-24 transaction polling is not enabled on this deployment",
+    });
+  });
+
+  /**
+   * @swagger
    * /api/payments/{id}:
    *   delete:
    *     summary: Soft delete a payment (preserves audit logs)
@@ -1302,6 +1311,7 @@ const webhookResult = await sendWebhook(
    */
   router.delete("/payments/:id", validateUuidParam(), async (req, res, next) => {
     try {
+      const supabase = await getSupabaseClient();
       // First check if payment exists and is not already deleted
       const { data: existing, error: fetchError } = await supabase
         .from("payments")
@@ -1324,7 +1334,7 @@ const webhookResult = await sendWebhook(
       }
 
       if (existing.deleted_at) {
-        return res.status(410).json({ 
+        return res.status(410).json({
           error: "Payment already deleted",
           deleted_at: existing.deleted_at
         });
@@ -1356,4 +1366,3 @@ const webhookResult = await sendWebhook(
 }
 
 export default createPaymentsRouter;
-

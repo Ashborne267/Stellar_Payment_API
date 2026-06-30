@@ -14,9 +14,54 @@ export function createSwaggerDefinition({
     info: {
       title: "Stellar Payment API",
       version: "0.1.0",
-      description: "API for creating and verifying Stellar network payments",
+      description: "API for creating and verifying Stellar network payments. Accept Stellar-based payments with simple links and status tracking.",
+      contact: {
+        name: "Stellar Payment API Support",
+        url: "https://github.com/emdevelopa/Stellar_Payment_API",
+      },
+      license: {
+        name: "MIT",
+      },
     },
-    servers: [{ url: serverUrl }],
+    servers: [
+      { 
+        url: serverUrl,
+        description: "API Server"
+      },
+    ],
+    components: {
+      securitySchemes: {
+        ApiKeyAuth: {
+          type: "apiKey",
+          in: "header",
+          name: "x-api-key",
+          description: "API Key for authenticating merchant requests. Obtain this key when registering a merchant.",
+        },
+      },
+    },
+    security: [
+      {
+        ApiKeyAuth: [],
+      },
+    ],
+    tags: [
+      {
+        name: "Payments",
+        description: "Payment creation and verification endpoints",
+      },
+      {
+        name: "Merchants",
+        description: "Merchant account and API key management",
+      },
+      {
+        name: "Webhooks",
+        description: "Webhook configuration and delivery logs",
+      },
+      {
+        name: "Metrics",
+        description: "Payment metrics and analytics",
+      },
+    ],
   };
 }
 

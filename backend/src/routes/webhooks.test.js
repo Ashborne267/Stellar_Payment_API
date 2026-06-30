@@ -136,36 +136,20 @@ describe('GET /api/webhooks/logs', () => {
     expect(failureLogs.every(log => log.status_code < 200 || log.status_code >= 300)).toBe(true)
   })
 
-  it('handles pagination correctly', () => {
-    const page = 2
-    const limit = 10
-    const offset = (page - 1) * limit
-
-    expect(offset).toBe(10)
-    expect(page).toBe(2)
-    expect(limit).toBe(10)
+  it('handles pagination cursor logic', () => {
+    const lastItem = { timestamp: '2024-03-26T12:00:00Z', id: 'log-1' }
+    const nextCursor = Buffer.from(JSON.stringify(lastItem)).toString('base64')
+    
+    const decoded = JSON.parse(Buffer.from(nextCursor, 'base64').toString('utf-8'))
+    expect(decoded.timestamp).toBe(lastItem.timestamp)
+    expect(decoded.id).toBe(lastItem.id)
   })
 
-  it('calculates total pages correctly', () => {
-    const total = 45
-    const limit = 20
-    const totalPages = Math.ceil(total / limit)
-
-    expect(totalPages).toBe(3)
-  })
-
-  it('limits maximum page size to 100', () => {
+  it('limits maximum limit to 100', () => {
     const requestedLimit = 500
     const actualLimit = Math.min(100, Math.max(1, requestedLimit))
 
     expect(actualLimit).toBe(100)
-  })
-
-  it('ensures minimum page is 1', () => {
-    const requestedPage = -5
-    const actualPage = Math.max(1, requestedPage)
-
-    expect(actualPage).toBe(1)
   })
 
   it('formats log response with success flag', () => {

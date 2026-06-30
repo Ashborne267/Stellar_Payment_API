@@ -32,6 +32,14 @@ This application is integrated with Sentry for comprehensive error tracking and 
 - **Uncaught Exceptions**: JavaScript errors are automatically captured
 - **Network Errors**: Failed API requests are tracked
 - **Performance Issues**: Slow transactions and rendering issues
+- **Session Replay**: User interactions (clicks, scrolls, navigation) are captured for debugging
+
+### Session Replay Privacy Defaults
+- **PII Masking**: All text content in replay is masked (`maskAllText: true`)
+- **Media Blocking**: Images and video are blocked in replay (`blockAllMedia: true`)
+- **Sampling**:
+  - `replaysSessionSampleRate = 0.1` (10% of all sessions)
+  - `replaysOnErrorSampleRate = 1.0` (100% of sessions with errors)
 
 ### Manual Error Reporting
 Use the `useErrorReporting` hook for custom error tracking:

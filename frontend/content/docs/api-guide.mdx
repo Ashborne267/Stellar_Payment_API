@@ -1,0 +1,290 @@
+# Subscription API Guide
+
+This guide is for teams integrating PLUTO into an external business app using the standard API-key flow (no x402 challenge handling).
+
+---
+
+## Integration architecture
+
+`Customer frontend -> Your backend -> PLUTO API`
+
+Recommended local setup used in this guide:
+
+- Store frontend: `https://your-app.vercel.app`
+- Store backend: `https://your-api.up.railway.app`
+- PLUTO frontend (checkout): `https://stellar-payment-api.vercel.app`
+- PLUTO backend (API): `https://pluto-api.up.railway.app`
+
+---
+
+## Your backend `.env` (non-x402)
+
+Store backend example:
+
+```bash
+# The port your integration server runs on
+PORT=3001
+
+# The production PLUTO API base URL
+PLUTO_API_URL=https://pluto-api.up.railway.app
+
+# Your Private Merchant API Key (keep this secret!)
+PLUTO_API_KEY=sk_your_merchant_api_key
+
+# The Stellar address where you want to receive payments
+MERCHANT_STELLAR_RECIPIENT=G_YOUR_RECEIVING_ADDRESS
+
+# Optional: Standard USDC issuer is auto-resolved if omitted
+# USDC_ISSUER=GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5
+```
+
+Notes:
+
+- Keep `PLUTO_API_KEY` only on your backend.
+- `USDC_ISSUER` is **optional** for standard USDC; PLUTO resolves it automatically based on your network.
+
+---
+
+## Step-by-step implementation (non-x402)
+
+### 1. Register merchant on PLUTO
+
+```http
+POST /api/register-merchant
+```
+
+Save:
+
+- `merchant.id`
+- `merchant.api_key`
+- `merchant.webhook_secret`
+
+### 2. Add checkout route in your backend
+
+<FrameworkTabs>
+  <FrameworkTab label="Express (Node)">
+```js
+import "dotenv/config";
+import express from "express";
+
+const router = express.Router();
+const API_URL = process.env.PLUTO_API_URL || "https://pluto-api.up.railway.app";
+
+router.post("/checkout", async (req, res) => {
+  try {
+    const payload = {
+      amount: req.body.amount,
+      asset: "USDC",
+      // Optional: Standard issuer is used if process.env.USDC_ISSUER is missing
+      asset_issuer: process.env.USDC_ISSUER, 
+      recipient: process.env.MERCHANT_STELLAR_RECIPIENT,
+      metadata: { cart_id: req.body.cartId },
+    };
+
+    const r = await fetch(`${API_URL}/api/create-payment`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.PLUTO_API_KEY,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await r.json();
+    return res.status(r.status).json(data);
+  } catch (err) {
+    return res.status(500).json({ error: err.message || "Checkout failed" });
+  }
+});
+
+export default router;
+```
+  </FrameworkTab>
+  <FrameworkTab label="Next.js (App Router)">
+```typescript
+import { NextResponse } from 'next/server';
+
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const API_URL = process.env.PLUTO_API_URL || "https://pluto-api.up.railway.app";
+
+    const payload = {
+      amount: body.amount,
+      asset: "USDC",
+      asset_issuer: process.env.USDC_ISSUER,
+      recipient: process.env.MERCHANT_STELLAR_RECIPIENT,
+      metadata: { cart_id: body.cartId },
+    };
+
+    const r = await fetch(`${API_URL}/api/create-payment`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.PLUTO_API_KEY!,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await r.json();
+    return NextResponse.json(data, { status: r.status });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
+}
+```
+  </FrameworkTab>
+  <FrameworkTab label="Python (Django)">
+```python
+import os
+import requests
+import json
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
+
+@csrf_exempt
+@require_POST
+def create_checkout(request):
+    try:
+        body = json.loads(request.body)
+        
+        payload = {
+            "amount": body.get("amount"),
+            "asset": "USDC",
+            # Optional: Standard issuer is used if USDC_ISSUER is missing
+            "asset_issuer": os.getenv("USDC_ISSUER"),
+            "recipient": os.getenv("MERCHANT_STELLAR_RECIPIENT"),
+            "metadata": {"cart_id": body.get("cartId")}
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": os.getenv("PLUTO_API_KEY")
+        }
+        
+        url = f"{os.getenv('PLUTO_API_URL')}/api/create-payment"
+        response = requests.post(url, json=payload, headers=headers)
+        
+        return JsonResponse(response.json(), status=response.status_code)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+```
+  </FrameworkTab>
+</FrameworkTabs>
+
+### 3. Call your backend from the frontend
+
+Once your backend route is ready, trigger it seamlessly from your frontend customer checkout page:
+
+<FrameworkTabs>
+  <FrameworkTab label="React">
+```tsx
+import { useState } from 'react';
+
+export default function CheckoutButton({ amount, cartId }) {
+  const [loading, setLoading] = useState(false);
+
+  const handleCheckout = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, cartId })
+      });
+      
+      const session = await response.json();
+      
+      if (session.payment_link) {
+        // Redirect standard browser to PLUTO UI
+        window.location.href = session.payment_link;
+      }
+    } catch (err) {
+      console.error("Checkout error:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button onClick={handleCheckout} disabled={loading}>
+      {loading ? 'Processing...' : `Pay $${amount} with Crypto`}
+    </button>
+  );
+}
+```
+  </FrameworkTab>
+  <FrameworkTab label="Vue 3 (Composition API)">
+```html
+<script setup>
+import { ref } from 'vue';
+
+const props = defineProps({
+  amount: Number,
+  cartId: String
+});
+
+const loading = ref(false);
+
+const handleCheckout = async () => {
+  loading.value = true;
+  try {
+    const response = await fetch('/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        amount: props.amount, 
+        cartId: props.cartId 
+      })
+    });
+    
+    const session = await response.json();
+    
+    if (session.payment_link) {
+      // Redirect standard browser to PLUTO UI
+      window.location.href = session.payment_link;
+    }
+  } catch (err) {
+    console.error("Checkout error:", err);
+  } finally {
+    loading.value = false;
+  }
+};
+</script>
+
+<template>
+  <button @click="handleCheckout" :disabled="loading">
+    {{ loading ? 'Processing...' : `Pay $${amount} with Crypto` }}
+  </button>
+</template>
+```
+  </FrameworkTab>
+</FrameworkTabs>
+
+### 4. Redirect customer to returned `payment_link`
+
+Example response:
+
+```json
+{
+  "payment_id": "f95aa43c-46ad-42f4-88b9-4c9be8d7865e",
+  "payment_link": "https://stellar-payment-api.vercel.app/pay/f95aa43c-46ad-42f4-88b9-4c9be8d7865e",
+  "status": "pending"
+}
+```
+
+### 5. Track result in your app
+
+Use one or both:
+
+- `GET /api/payment-status/:id`
+- Webhooks + signature verification (`PLUTO_WEBHOOK_SECRET`)
+
+---
+
+## Common mistakes
+
+- Sending `x-api-key` from browser/frontend code.
+- Missing `asset_issuer` when sending **non-standard** tokens.
+- Pointing users to the wrong checkout domain.

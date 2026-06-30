@@ -51,6 +51,10 @@ function validateEnvironmentVariables() {
     }
   }
 
+  if (!process.env.RESEND_API_KEY) {
+  console.warn("⚠️  RESEND_API_KEY is not set — receipt emails will be disabled.");
+}
+
   console.log('✅ Environment variables validated');
 }
 

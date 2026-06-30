@@ -4,197 +4,227 @@
  */
 
 import express from "express";
+import * as StellarSdk from "stellar-sdk";
 import { supabase } from "../lib/supabase.js";
 import {
   generateChallenge,
   verifyChallenge,
   generateSessionToken,
+  getHomeDomain,
+  getNetworkPassphrase,
+  lookupMerchantByStellarAddress,
+  Sep10AuthError,
+  validateChallengeXdr,
 } from "../lib/sep10-auth.js";
+import { hashPassword, verifyPassword } from "../lib/auth.js";
 import { logLoginAttempt } from "../lib/audit.js";
+import { validateRequest } from "../lib/validation.js";
+import { authChallengeSchema, authVerifySchema } from "../lib/request-schemas.js";
+import {
+  createSep10ChallengeRateLimit,
+  createSep10VerifyRateLimit,
+} from "../lib/rate-limit.js";
 
-const router = express.Router();
+const defaultSep10ChallengeRateLimit = createSep10ChallengeRateLimit();
+const defaultSep10VerifyRateLimit = createSep10VerifyRateLimit();
 
-/**
- * @swagger
- * /api/auth/challenge:
- *   post:
- *     summary: Generate a SEP-0010 challenge transaction
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [account]
- *             properties:
- *               account:
- *                 type: string
- *                 description: Stellar public key (G...)
- *     responses:
- *       200:
- *         description: Challenge transaction
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 transaction:
- *                   type: string
- *                   description: Base64-encoded challenge XDR
- *                 network_passphrase:
- *                   type: string
- *       400:
- *         description: Invalid request
- */
-router.post("/auth/challenge", async (req, res, next) => {
-  try {
-    const { account } = req.body;
+export default function createAuthRouter({
+  sep10ChallengeRateLimit = defaultSep10ChallengeRateLimit,
+  sep10VerifyRateLimit = defaultSep10VerifyRateLimit,
+} = {}) {
+  const router = express.Router();
 
-    if (!account || typeof account !== "string") {
-      return res.status(400).json({ error: "Account address required" });
-    }
+  /**
+   * @swagger
+   * /api/auth/login:
+   *   post:
+   *     summary: Login with email and password
+   *     tags: [Auth]
+   *     requestBody:
+   *       required: true
+   *       content:
+   *         application/json:
+   *           schema:
+   *             type: object
+   *             required: [email, password]
+   *             properties:
+   *               email:
+   *                 type: string
+   *               password:
+   *                 type: string
+   *     responses:
+   *       200:
+   *         description: Login successful
+   *       401:
+   *         description: Invalid credentials
+   */
+  router.post("/auth/login", async (req, res, next) => {
+    const ipAddress = req.ip ?? null;
+    const userAgent = req.get("user-agent") ?? null;
 
-    // Validate Stellar address format
-    if (!account.startsWith("G") || account.length !== 56) {
-      return res.status(400).json({ error: "Invalid Stellar address" });
-    }
+    try {
+      const { email, password } = req.body;
 
-    const challengeXdr = generateChallenge(account);
-    const networkPassphrase =
-      process.env.STELLAR_NETWORK === "public"
-        ? "Public Global Stellar Network ; September 2015"
-        : "Test SDF Network ; September 2015";
+      if (!email || !password) {
+        return res.status(400).json({ error: "Email and password are required" });
+      }
 
-    res.json({
-      transaction: challengeXdr,
-      network_passphrase: networkPassphrase,
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+      const { data: merchant, error } = await supabase
+        .from("merchants")
+        .select("id, email, business_name, notification_email, password_hash, api_key, webhook_secret, merchant_settings")
+        .eq("email", email.toLowerCase().trim())
+        .is("deleted_at", null)
+        .maybeSingle();
 
-/**
- * @swagger
- * /api/auth/verify:
- *   post:
- *     summary: Verify a signed SEP-0010 challenge and issue session token
- *     tags: [Auth]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [transaction]
- *             properties:
- *               transaction:
- *                 type: string
- *                 description: Signed challenge transaction XDR
- *     responses:
- *       200:
- *         description: Authentication successful
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 token:
- *                   type: string
- *                   description: Session JWT token
- *                 merchant:
- *                   type: object
- *       401:
- *         description: Authentication failed
- */
-router.post("/auth/verify", async (req, res, next) => {
-  const ipAddress = req.ip ?? null;
-  const userAgent = req.get("user-agent") ?? null;
+      if (error) {
+        error.status = 500;
+        throw error;
+      }
 
-  try {
-    const { transaction } = req.body;
+      if (!merchant || !merchant.password_hash) {
+        await logLoginAttempt({ merchantId: null, ipAddress, userAgent, status: "failure" });
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
 
-    if (!transaction || typeof transaction !== "string") {
-      return res.status(400).json({ error: "Transaction XDR required" });
-    }
+      const valid = await verifyPassword(password, merchant.password_hash);
+      if (!valid) {
+        await logLoginAttempt({ merchantId: merchant.id, ipAddress, userAgent, status: "failure" });
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
 
-    // Extract client account from transaction
-    const StellarSdk = await import("stellar-sdk");
-    const networkPassphrase =
-      process.env.STELLAR_NETWORK === "public"
-        ? StellarSdk.Networks.PUBLIC
-        : StellarSdk.Networks.TESTNET;
+      const token = generateSessionToken(merchant.id, merchant.email);
 
-    const tx = StellarSdk.TransactionBuilder.fromXDR(
-      transaction,
-      networkPassphrase,
-    );
+      await logLoginAttempt({ merchantId: merchant.id, ipAddress, userAgent, status: "success" });
 
-    const clientAccount = tx.operations[0]?.source;
-    if (!clientAccount) {
-      return res.status(400).json({ error: "Invalid transaction structure" });
-    }
-
-    // Verify challenge signature
-    const verification = verifyChallenge(transaction, clientAccount);
-    if (!verification.valid) {
-      await logLoginAttempt({
-        merchantId: null,
-        ipAddress,
-        userAgent,
-        status: "failure",
+      res.json({
+        token,
+        merchant: {
+          id: merchant.id,
+          email: merchant.email,
+          business_name: merchant.business_name,
+          notification_email: merchant.notification_email,
+          api_key: merchant.api_key,
+          webhook_secret: merchant.webhook_secret,
+          merchant_settings: merchant.merchant_settings,
+        },
       });
-      return res.status(401).json({ error: verification.error });
+    } catch (err) {
+      next(err);
     }
+  });
 
-    // Look up merchant by Stellar address
-    const { data: merchant, error } = await supabase
-      .from("merchants")
-      .select("id, email, business_name, notification_email")
-      .eq("recipient", clientAccount)
-      .maybeSingle();
+  router.post(
+    "/auth/challenge",
+    sep10ChallengeRateLimit,
+    validateRequest({ body: authChallengeSchema }),
+    async (req, res, next) => {
+      try {
+        const { account } = req.body;
 
-    if (error) {
-      error.status = 500;
-      throw error;
-    }
+        const challengeXdr = generateChallenge(account);
+        const networkPassphrase =
+          process.env.STELLAR_NETWORK === "public"
+            ? "Public Global Stellar Network ; September 2015"
+            : "Test SDF Network ; September 2015";
 
-    if (!merchant) {
-      await logLoginAttempt({
-        merchantId: null,
-        ipAddress,
-        userAgent,
-        status: "failure",
-      });
-      return res.status(401).json({
-        error: "No merchant account found for this Stellar address",
-      });
-    }
+        res.json({
+          transaction: challengeXdr,
+          network_passphrase: networkPassphrase,
+        });
+      } catch (err) {
+        next(err);
+      }
+    },
+  );
 
-    // Generate session token
-    const token = generateSessionToken(merchant.id, clientAccount);
+  router.post(
+    "/auth/verify",
+    sep10VerifyRateLimit,
+    validateRequest({ body: authVerifySchema }),
+    async (req, res, next) => {
+      const ipAddress = req.ip ?? null;
+      const userAgent = req.get("user-agent") ?? null;
 
-    // Audit: successful login
-    await logLoginAttempt({
-      merchantId: merchant.id,
-      ipAddress,
-      userAgent,
-      status: "success",
-    });
+      try {
+        const { transaction } = req.body;
 
-    res.json({
-      token,
-      merchant: {
-        id: merchant.id,
-        email: merchant.email,
-        business_name: merchant.business_name,
-        stellar_address: clientAccount,
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
+        const xdrValidation = validateChallengeXdr(transaction);
+        if (!xdrValidation.valid) {
+          return res.status(400).json({ error: xdrValidation.error });
+        }
 
-export default router;
+        let tx;
+        try {
+          tx = StellarSdk.TransactionBuilder.fromXDR(transaction, getNetworkPassphrase());
+        } catch {
+          return res.status(400).json({ error: "Invalid challenge transaction" });
+        }
+
+        const operation = tx.operations?.[0];
+        const clientAccount = operation?.source;
+        if (!clientAccount || typeof clientAccount !== "string") {
+          return res.status(400).json({ error: "Invalid transaction structure" });
+        }
+
+        const verification = verifyChallenge(transaction, clientAccount, getHomeDomain());
+
+        if (!verification.valid) {
+          await logLoginAttempt({
+            merchantId: null,
+            ipAddress,
+            userAgent,
+            status: "failure",
+          });
+          return res.status(401).json({
+            error: verification.error,
+            code: verification.code,
+          });
+        }
+
+        const merchant = await lookupMerchantByStellarAddress(clientAccount, supabase);
+
+        if (!merchant) {
+          await logLoginAttempt({
+            merchantId: null,
+            ipAddress,
+            userAgent,
+            status: "failure",
+          });
+          return res.status(401).json({
+            error: "No merchant account found for this Stellar address",
+          });
+        }
+
+        const token = generateSessionToken(merchant.id, merchant.email || clientAccount);
+
+        await logLoginAttempt({
+          merchantId: merchant.id,
+          ipAddress,
+          userAgent,
+          status: "success",
+        });
+
+        res.json({
+          token,
+          merchant: {
+            id: merchant.id,
+            email: merchant.email,
+            business_name: merchant.business_name,
+            stellar_address: clientAccount,
+          },
+        });
+      } catch (err) {
+        if (err instanceof Sep10AuthError) {
+          return res.status(err.httpStatus).json({
+            error: err.code,
+            message: err.message,
+            retryable: err.retryable,
+          });
+        }
+        next(err);
+      }
+    },
+  );
+
+  return router;
+}

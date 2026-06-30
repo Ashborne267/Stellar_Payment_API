@@ -1,0 +1,153 @@
+import express from "express";
+import request from "supertest";
+import * as StellarSdk from "stellar-sdk";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockMaybeSingle, mockFrom, mockLogLoginAttempt } = vi.hoisted(() => ({
+  mockMaybeSingle: vi.fn(),
+  mockFrom: vi.fn(),
+  mockLogLoginAttempt: vi.fn(),
+}));
+
+vi.mock("../lib/supabase.js", () => ({
+  supabase: {
+    from: mockFrom,
+  },
+}));
+
+vi.mock("../lib/audit.js", () => ({
+  logLoginAttempt: mockLogLoginAttempt,
+}));
+
+vi.mock("../lib/auth.js", () => ({
+  hashPassword: vi.fn(),
+  verifyPassword: vi.fn(),
+}));
+
+vi.mock("../lib/validation.js", () => ({
+  validateRequest: () => (_req, _res, next) => next(),
+}));
+
+vi.mock("../lib/request-schemas.js", () => ({
+  authChallengeSchema: {},
+  authVerifySchema: {},
+}));
+
+import createAuthRouter from "./auth.js";
+import {
+  createSep10ChallengeRateLimit,
+  createSep10VerifyRateLimit,
+  getSep10ChallengeRateLimitKey,
+  getSep10VerifyRateLimitKey,
+} from "../lib/rate-limit.js";
+import { _resetNonceCacheForTests } from "../lib/sep10-auth.js";
+
+function createApp(router) {
+  const app = express();
+  app.use(express.json());
+  app.use("/api", router);
+  return app;
+}
+
+describe("SEP-10 auth routes", () => {
+  let clientKeypair;
+  let serverKeypair;
+
+  beforeAll(() => {
+    process.env.JWT_SECRET = "test-jwt-secret";
+    process.env.HOME_DOMAIN = "localhost";
+    clientKeypair = StellarSdk.Keypair.random();
+    serverKeypair = StellarSdk.Keypair.random();
+    process.env.SEP10_SERVER_SIGNING_KEY = serverKeypair.secret();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetNonceCacheForTests();
+    mockFrom.mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          is: vi.fn().mockReturnValue({
+            maybeSingle: mockMaybeSingle,
+          }),
+        }),
+      }),
+    });
+  });
+
+  it("builds challenge rate-limit keys from account and IP", () => {
+    const key = getSep10ChallengeRateLimitKey({
+      body: { account: "GABC123" },
+      ip: "203.0.113.10",
+    });
+    expect(key).toContain("sep10:challenge:GABC123:");
+  });
+
+  it("builds verify rate-limit keys from client IP", () => {
+    const key = getSep10VerifyRateLimitKey({ ip: "203.0.113.10" });
+    expect(key).toBe("sep10:verify:203.0.113.10");
+  });
+
+  it("rate-limits repeated challenge requests for the same account", async () => {
+    const limiter = createSep10ChallengeRateLimit({ max: 1, windowMs: 60_000 });
+    const app = createApp(createAuthRouter({ sep10ChallengeRateLimit: limiter }));
+
+    await request(app)
+      .post("/api/auth/challenge")
+      .send({ account: clientKeypair.publicKey() })
+      .expect(200);
+
+    const limited = await request(app)
+      .post("/api/auth/challenge")
+      .send({ account: clientKeypair.publicKey() });
+
+    expect(limited.status).toBe(429);
+    expect(limited.body.code).toBe("SEP10_RATE_LIMITED");
+  });
+
+  it("returns retryable 503 when merchant lookup store is temporarily unavailable", async () => {
+    const challengeRes = await request(
+      createApp(createAuthRouter({ sep10VerifyRateLimit: createSep10VerifyRateLimit({ max: 100 }) })),
+    )
+      .post("/api/auth/challenge")
+      .send({ account: clientKeypair.publicKey() })
+      .expect(200);
+
+    const tx = StellarSdk.TransactionBuilder.fromXDR(
+      challengeRes.body.transaction,
+      StellarSdk.Networks.TESTNET,
+    );
+    tx.sign(clientKeypair);
+
+    mockMaybeSingle.mockResolvedValue({
+      data: null,
+      error: { message: "fetch failed: upstream timeout" },
+    });
+
+    const response = await request(
+      createApp(createAuthRouter({ sep10VerifyRateLimit: createSep10VerifyRateLimit({ max: 100 }) })),
+    )
+      .post("/api/auth/verify")
+      .send({ transaction: tx.toXDR() });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: "SERVICE_UNAVAILABLE",
+      message: "Authentication store temporarily unavailable, please retry",
+      retryable: true,
+    });
+  });
+
+  it("rate-limits repeated verify attempts from the same IP", async () => {
+    const verifyLimiter = createSep10VerifyRateLimit({ max: 1, windowMs: 60_000 });
+    const app = createApp(createAuthRouter({ sep10VerifyRateLimit: verifyLimiter }));
+
+    const invalidTx = { transaction: "not-valid-base64!!!" };
+    const first = await request(app).post("/api/auth/verify").send(invalidTx);
+    const second = await request(app).post("/api/auth/verify").send(invalidTx);
+
+    expect(first.status).toBe(400);
+    expect(second.status).toBe(429);
+    expect(second.body.code).toBe("SEP10_RATE_LIMITED");
+  });
+});

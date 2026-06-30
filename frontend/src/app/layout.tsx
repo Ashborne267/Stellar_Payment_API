@@ -1,5 +1,5 @@
 import "./globals.css";
-import { Space_Grotesk, Space_Mono } from "next/font/google";
+import { Inconsolata, Space_Mono } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import ThemeProvider from "@/components/ThemeProvider";
@@ -8,13 +8,29 @@ import ToastProvider from "@/components/ToastProvider";
 import CommandPalette from "@/components/CommandPalette";
 import KeyboardShortcuts from "@/components/KeyboardShortcuts";
 import { WalletContextProvider } from "@/lib/wallet-context";
+import { DisplayPreferencesProvider } from "@/lib/display-preferences";
+import { Metadata, Viewport } from "next";
 
-const spaceGrotesk = Space_Grotesk({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
-const spaceMono = Space_Mono({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-mono", display: "swap" });
+const sansFont = Inconsolata({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-inconsolata", display: "swap" });
+const displayFont = Space_Mono({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-space-mono", display: "swap" });
+const monoFont = Space_Mono({ subsets: ["latin"], weight: ["400", "700"], variable: "--font-mono", display: "swap" });
 
-export const metadata = {
-  title: "Stellar Payment Dashboard",
-  description: "Accept Stellar payments with simple links and status tracking."
+export const metadata: Metadata = {
+  title: "PLUTO | Web3 Payments",
+  description: "The Hub for Decentralized Commerce on Stellar.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "PLUTO",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#FFFFFF",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
@@ -23,17 +39,22 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang={locale} suppressHydrationWarning>
-      <body className={`${spaceGrotesk.variable} ${spaceMono.variable} min-h-screen font-sans`}>
+      <head>
+        <meta name="theme-color" content="#FFFFFF" />
+      </head>
+      <body className={`${sansFont.variable} ${displayFont.variable} ${monoFont.variable} min-h-screen font-sans bg-white text-[#0A0A0A]`}>
         <NextIntlClientProvider locale={locale} messages={messages}>
           <ThemeProvider>
-            <WalletContextProvider>
-              <ToastProvider />
-              <CommandPalette />
-              <KeyboardShortcuts />
-              <ErrorBoundary>
-                {children}
-              </ErrorBoundary>
-            </WalletContextProvider>
+            <DisplayPreferencesProvider>
+              <WalletContextProvider>
+                <ToastProvider />
+                <CommandPalette />
+                <KeyboardShortcuts />
+                <ErrorBoundary>
+                  {children}
+                </ErrorBoundary>
+              </WalletContextProvider>
+            </DisplayPreferencesProvider>
           </ThemeProvider>
         </NextIntlClientProvider>
       </body>

@@ -2,9 +2,18 @@ import * as Sentry from "@sentry/nextjs";
 
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+  integrations: [
+    Sentry.replayIntegration({
+      // Privacy-by-default: mask text and block media in recordings.
+      maskAllText: true,
+      blockAllMedia: true,
+    }),
+  ],
   // Performance monitoring
   tracesSampleRate: 1.0,
-  // Session replay
+  // Session replay sampling
+  // - 10% of all sessions are recorded.
+  // - 100% of sessions with errors are recorded.
   replaysSessionSampleRate: 0.1,
   replaysOnErrorSampleRate: 1.0,
   // Environment

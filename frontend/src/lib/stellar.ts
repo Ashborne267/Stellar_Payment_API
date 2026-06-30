@@ -6,6 +6,8 @@ export interface PaymentTransactionParams {
   amount: string;
   assetCode: string;
   assetIssuer: string | null;
+  memo?: string | null;
+  memoType?: string | null;
   horizonUrl: string;
   networkPassphrase: string;
 }
@@ -20,6 +22,8 @@ export interface PathPaymentTransactionParams {
   destAssetCode: string;
   destAssetIssuer: string | null;
   path: Array<{ asset_code: string; asset_issuer: string | null }>;
+  memo?: string | null;
+  memoType?: string | null;
   horizonUrl: string;
   networkPassphrase: string;
 }
@@ -39,6 +43,28 @@ export function resolveAsset(assetCode: string, assetIssuer: string | null): Ste
   return new StellarSdk.Asset(assetCode, assetIssuer);
 }
 
+function resolveMemo(
+  memo: string | null | undefined,
+  memoType: string | null | undefined
+): StellarSdk.Memo | undefined {
+  if (!memo || !memoType) {
+    return undefined;
+  }
+
+  switch (memoType.toLowerCase()) {
+    case "text":
+      return StellarSdk.Memo.text(memo);
+    case "id":
+      return StellarSdk.Memo.id(memo);
+    case "hash":
+      return StellarSdk.Memo.hash(memo);
+    case "return":
+      return StellarSdk.Memo.return(memo);
+    default:
+      throw new Error(`Unsupported memo type: ${memoType}`);
+  }
+}
+
 /**
  * Build a payment transaction for submission to the Stellar network
  */
@@ -55,7 +81,7 @@ export async function buildPaymentTransaction(
     const asset = resolveAsset(params.assetCode, params.assetIssuer);
 
     // Build the transaction
-    const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+    const transactionBuilder = new StellarSdk.TransactionBuilder(sourceAccount, {
       fee: StellarSdk.BASE_FEE,
       networkPassphrase: params.networkPassphrase,
     })
@@ -65,9 +91,14 @@ export async function buildPaymentTransaction(
           asset: asset,
           amount: params.amount,
         })
-      )
-      .setTimeout(300)
-      .build();
+      );
+
+    const memo = resolveMemo(params.memo, params.memoType);
+    if (memo) {
+      transactionBuilder.addMemo(memo);
+    }
+
+    const transaction = transactionBuilder.setTimeout(300).build();
 
     return transaction.toXDR();
   } catch (error) {
@@ -94,7 +125,7 @@ export async function buildPathPaymentTransaction(
 
     const stellarPath = params.path.map((p) => resolveAsset(p.asset_code, p.asset_issuer));
 
-    const transaction = new StellarSdk.TransactionBuilder(sourceAccount, {
+    const transactionBuilder = new StellarSdk.TransactionBuilder(sourceAccount, {
       fee: StellarSdk.BASE_FEE,
       networkPassphrase: params.networkPassphrase,
     })
@@ -107,9 +138,14 @@ export async function buildPathPaymentTransaction(
           destAmount: params.destAmount,
           path: stellarPath,
         })
-      )
-      .setTimeout(300)
-      .build();
+      );
+
+    const memo = resolveMemo(params.memo, params.memoType);
+    if (memo) {
+      transactionBuilder.addMemo(memo);
+    }
+
+    const transaction = transactionBuilder.setTimeout(300).build();
 
     return transaction.toXDR();
   } catch (error) {
@@ -196,4 +232,41 @@ export async function initiateWithdrawal(
   }
 
   return data.url;
+}
+
+export interface AssetBalance {
+  code: string;
+  issuer: string | null;
+  balance: string;
+}
+
+/**
+ * Fetch balances for a Stellar account and return them in a simplified format.
+ */
+export async function getAccountBalances(
+  publicKey: string,
+  horizonUrl: string
+): Promise<AssetBalance[]> {
+  try {
+    const server = new StellarSdk.Horizon.Server(horizonUrl);
+    const account = await server.loadAccount(publicKey);
+
+    return account.balances.map((b) => {
+      if (b.asset_type === "native") {
+        return {
+          code: "XLM",
+          issuer: null,
+          balance: b.balance,
+        };
+      }
+      return {
+        code: (b as { asset_code?: string }).asset_code || "UNKNOWN",
+        issuer: (b as { asset_issuer?: string }).asset_issuer || null,
+        balance: b.balance,
+      };
+    });
+  } catch (error) {
+    console.error("Failed to fetch account balances:", error);
+    return [];
+  }
 }
