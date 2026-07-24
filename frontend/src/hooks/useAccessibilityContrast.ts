@@ -80,6 +80,7 @@ export function useAccessibilityContrast() {
     error,
     announcement,
     loadingState,
+    getNextTheme,
     handleContrastToggle,
     getAriaLabel,
     getTitle,
