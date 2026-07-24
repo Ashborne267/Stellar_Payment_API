@@ -440,5 +440,17 @@
     "failedToTestWebhook": "Failed to test webhook",
     "testWebhookSentStatus": "Test webhook sent — status {status}",
     "colorPickerLabel": "{label} color picker"
+  },
+  "notificationCenter": {
+    "buttonLabel": "Notifications",
+    "buttonLabelWithCount": "Notifications ({count} unread)",
+    "panelLabel": "Notification Center",
+    "heading": "Notifications",
+    "unreadCount": "{count} unread",
+    "noAlerts": "No new alerts",
+    "alertLabel": "Alert",
+    "dismissLabel": "Dismiss notification: {message}",
+    "notificationLabel": "Notification: {message}",
+    "timestampLabel": "Timestamp: {timestamp}"
   }
 }

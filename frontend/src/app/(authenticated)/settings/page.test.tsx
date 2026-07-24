@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom/vitest";
-import SettingsDashboardClient from "./SettingsDashboardClient";
+// Import the client widget directly so the test bypasses the RSC wrapper (#1180/#1190)
+import SettingsWidget from "./SettingsWidget";
 import * as merchantStore from "@/lib/merchant-store";
 import * as displayPreferences from "@/lib/display-preferences";
 
@@ -105,7 +106,7 @@ function setupMocks(apiKey = "sk_test_key") {
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-describe("SettingsDashboardClient", () => {
+describe("SettingsWidget", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setupMocks();
@@ -115,12 +116,12 @@ describe("SettingsDashboardClient", () => {
 
   describe("Rendering", () => {
     it("renders the page heading", async () => {
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await waitFor(() => expect(screen.getByText("title")).toBeInTheDocument());
     });
 
     it("renders all nav tabs", async () => {
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       const labels = [
         "navApiKeys",
         "navBranding",
@@ -137,7 +138,7 @@ describe("SettingsDashboardClient", () => {
     });
 
     it("shows API Keys panel by default", async () => {
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await waitFor(() =>
         expect(screen.getByText("apiAuthTitle")).toBeInTheDocument()
       );
@@ -145,13 +146,13 @@ describe("SettingsDashboardClient", () => {
 
     it("shows no-API-key message when apiKey is absent", () => {
       vi.mocked(merchantStore).useMerchantApiKey = vi.fn(() => null);
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       expect(screen.getByText("noApiKeyTitle")).toBeInTheDocument();
     });
 
     it("shows a busy loading skeleton while store is not hydrated", () => {
       vi.mocked(merchantStore).useMerchantHydrated = vi.fn(() => false);
-      const { container } = render(<SettingsDashboardClient />);
+      const { container } = render(<SettingsWidget />);
       expect(container.firstChild).toHaveAttribute("aria-busy", "true");
       expect(screen.getByRole("status")).toHaveTextContent("loadingSettings");
     });
@@ -162,7 +163,7 @@ describe("SettingsDashboardClient", () => {
   describe("Tab navigation", () => {
     it("switches to Branding panel on click", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       const tabs = screen.getAllByRole("tab", { name: "navBranding" });
       await user.click(tabs[0]);
       await waitFor(() =>
@@ -172,7 +173,7 @@ describe("SettingsDashboardClient", () => {
 
     it("switches to Display panel on click", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       const tabs = screen.getAllByRole("tab", { name: "navDisplay" });
       await user.click(tabs[0]);
       await waitFor(() =>
@@ -182,7 +183,7 @@ describe("SettingsDashboardClient", () => {
 
     it("switches to Webhooks panel on click", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       const tabs = screen.getAllByRole("tab", { name: "navWebhooks" });
       await user.click(tabs[0]);
       await waitFor(() =>
@@ -192,7 +193,7 @@ describe("SettingsDashboardClient", () => {
 
     it("switches to Permissions panel on click", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       const tabs = screen.getAllByRole("tab", { name: "navPermissions" });
       await user.click(tabs[0]);
       await waitFor(() =>
@@ -202,7 +203,7 @@ describe("SettingsDashboardClient", () => {
 
     it("switches to Danger Zone panel on click", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       const tabs = screen.getAllByRole("tab", { name: "navDanger" });
       await user.click(tabs[0]);
       await waitFor(() =>
@@ -216,7 +217,7 @@ describe("SettingsDashboardClient", () => {
   describe("API Keys tab", () => {
     it("reveals API key on button click", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await waitFor(() => screen.getByText("apiAuthTitle"));
 
       const revealBtn = screen.getByRole("button", { name: /reveal/i });
@@ -226,7 +227,7 @@ describe("SettingsDashboardClient", () => {
 
     it("shows rotate key confirmation flow", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await waitFor(() => screen.getByText("apiAuthTitle"));
 
       await user.click(screen.getByRole("button", { name: /rotateKeyEllipsis/i }));
@@ -235,7 +236,7 @@ describe("SettingsDashboardClient", () => {
 
     it("cancels rotation when Cancel clicked", async () => {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await waitFor(() => screen.getByText("apiAuthTitle"));
 
       await user.click(screen.getByRole("button", { name: /rotateKeyEllipsis/i }));
@@ -253,7 +254,7 @@ describe("SettingsDashboardClient", () => {
         return Promise.resolve({ ok: true, json: async () => ({}) });
       });
 
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await waitFor(() => screen.getByText("apiAuthTitle"));
 
       await user.click(screen.getByRole("button", { name: /rotateKeyEllipsis/i }));
@@ -273,7 +274,7 @@ describe("SettingsDashboardClient", () => {
   describe("Branding tab", () => {
     async function openBranding() {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await user.click(screen.getAllByRole("tab", { name: "navBranding" })[0]);
       await waitFor(() => screen.getByText("checkoutBrandingTitle"));
       return user;
@@ -310,7 +311,7 @@ describe("SettingsDashboardClient", () => {
         setHideCents,
       }));
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await user.click(screen.getAllByRole("tab", { name: "navDisplay" })[0]);
       await waitFor(() => screen.getByText("hideTrailingCents"));
 
@@ -324,7 +325,7 @@ describe("SettingsDashboardClient", () => {
   describe("Webhooks tab", () => {
     async function openWebhooks() {
       const user = userEvent.setup();
-      render(<SettingsDashboardClient />);
+      render(<SettingsWidget />);
       await user.click(screen.getAllByRole("tab", { name: "navWebhooks" })[0]);
       await waitFor(() => screen.getByText("webhookEndpointTitle"));
       return user;

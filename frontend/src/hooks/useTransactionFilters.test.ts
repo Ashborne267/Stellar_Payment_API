@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { useTransactionFilters } from "./useTransactionFilters";
 import { DEFAULT_PAYMENT_HISTORY_FILTERS } from "@/lib/payment-history-filters";
 
@@ -97,7 +97,7 @@ describe("useTransactionFilters", () => {
         vi.advanceTimersByTime(350);
       });
 
-      await waitFor(() => expect(pushSearchParams).toHaveBeenCalledTimes(1));
+      expect(pushSearchParams).toHaveBeenCalledTimes(1);
 
       const called = pushSearchParams.mock.calls[0][0] as URLSearchParams;
       expect(called.get("search")).toBe("hello");
@@ -114,7 +114,7 @@ describe("useTransactionFilters", () => {
         vi.advanceTimersByTime(350);
       });
 
-      await waitFor(() => expect(result.current.searchSyncPending).toBe(false));
+      expect(result.current.searchSyncPending).toBe(false);
     });
 
     it("debounces rapid keystrokes — only one push after silence", async () => {
@@ -135,7 +135,7 @@ describe("useTransactionFilters", () => {
         vi.advanceTimersByTime(350);
       });
 
-      await waitFor(() => expect(pushSearchParams).toHaveBeenCalledTimes(1));
+      expect(pushSearchParams).toHaveBeenCalledTimes(1);
 
       const called = pushSearchParams.mock.calls[0][0] as URLSearchParams;
       expect(called.get("search")).toBe("hel");
@@ -270,7 +270,7 @@ describe("useTransactionFilters", () => {
       });
 
       // Only one push (the clear), not two
-      await waitFor(() => expect(pushSearchParams).toHaveBeenCalledTimes(1));
+      expect(pushSearchParams).toHaveBeenCalledTimes(1);
       expect(result.current.searchSyncPending).toBe(false);
     });
   });

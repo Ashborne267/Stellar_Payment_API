@@ -440,5 +440,17 @@
     "failedToTestWebhook": "Error al probar el webhook",
     "testWebhookSentStatus": "Webhook de prueba enviado — estado {status}",
     "colorPickerLabel": "Selector de color {label}"
+  },
+  "notificationCenter": {
+    "buttonLabel": "Notificaciones",
+    "buttonLabelWithCount": "Notificaciones ({count} sin leer)",
+    "panelLabel": "Centro de Notificaciones",
+    "heading": "Notificaciones",
+    "unreadCount": "{count} sin leer",
+    "noAlerts": "Sin nuevas alertas",
+    "alertLabel": "Alerta",
+    "dismissLabel": "Descartar notificación: {message}",
+    "notificationLabel": "Notificación: {message}",
+    "timestampLabel": "Marca de tiempo: {timestamp}"
   }
 }

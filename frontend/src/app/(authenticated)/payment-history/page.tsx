@@ -1,14 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import PaymentDetailModal from "@/components/PaymentDetailModal";
-import PaymentDetailsSheet from "@/components/PaymentDetailsSheet";
-import ExportCsvButton from "@/components/ExportCsvButton";
-import TransactionFilterSidebar from "@/components/TransactionFilterSidebar";
 import { localeToLanguageTag } from "@/i18n/config";
 import { toast } from "sonner";
 import {
@@ -16,9 +13,23 @@ import {
   useMerchantApiKey,
   useMerchantId,
 } from "@/lib/merchant-store";
-import { buildPaymentHistorySearchParams } from "@/lib/payment-history-filters";
 import { useTransactionFilters } from "@/hooks/useTransactionFilters";
 import { usePaymentSocket } from "@/lib/usePaymentSocket";
+
+const ExportCsvButton = dynamic(() => import("@/components/ExportCsvButton"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-10 w-28 rounded-xl border border-[#E8E8E8] bg-[#F9F9F9]" aria-hidden="true" />
+  ),
+});
+const PaymentDetailModal = dynamic(() => import("@/components/PaymentDetailModal"), { ssr: false });
+const PaymentDetailsSheet = dynamic(() => import("@/components/PaymentDetailsSheet"), { ssr: false });
+const TransactionFilterSidebar = dynamic(() => import("@/components/TransactionFilterSidebar"), {
+  ssr: false,
+  loading: () => (
+    <div className="hidden h-[420px] w-[320px] rounded-2xl border border-[#E8E8E8] bg-[#F9F9F9] lg:block" aria-hidden="true" />
+  ),
+});
 
 interface Payment {
   id: string;
@@ -60,6 +71,10 @@ export default function PaymentHistoryPage() {
   const searchParams = useSearchParams();
   const apiKey = useMerchantApiKey();
   const merchantId = useMerchantId();
+  const currentPage = useMemo(() => {
+    const parsed = Number(searchParams.get("page") ?? "1");
+    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 1;
+  }, [searchParams]);
 
   useHydrateMerchantStore();
 
@@ -81,6 +96,19 @@ export default function PaymentHistoryPage() {
     onClearFilter,
     onClearAll,
   } = useTransactionFilters(pushSearchParams, searchParams);
+  const handlePageChange = useCallback(
+    (page: number) => {
+      const nextPage = Math.max(1, page);
+      const params = new URLSearchParams(searchParams.toString());
+      if (nextPage === 1) {
+        params.delete("page");
+      } else {
+        params.set("page", String(nextPage));
+      }
+      pushSearchParams(params);
+    },
+    [pushSearchParams, searchParams],
+  );
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -159,7 +187,7 @@ export default function PaymentHistoryPage() {
 
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
         const params = new URLSearchParams(searchParams.toString());
-        params.set("page", "1");
+        params.set("page", currentPage.toString());
         params.set("limit", LIMIT.toString());
 
         const response = await fetch(`${apiUrl}/api/payments?${params.toString()}`, {
@@ -182,13 +210,16 @@ export default function PaymentHistoryPage() {
 
     fetchPayments();
     return () => controller.abort();
-  }, [searchParams, apiKey, t]);
+  }, [searchParams, currentPage, apiKey, t]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
   const handlePaymentClick = (paymentId: string) => {
     setSelectedPayment(paymentId);
     setIsSheetOpen(true);
   };
+  const totalPages = Math.max(1, Math.ceil(totalCount / LIMIT));
+  const pageStart = totalCount === 0 ? 0 : (currentPage - 1) * LIMIT + 1;
+  const pageEnd = Math.min(currentPage * LIMIT, totalCount);
 
   // ── Loading state ─────────────────────────────────────────────────────────────
   if (loading) {
@@ -430,7 +461,9 @@ export default function PaymentHistoryPage() {
           {/* Results count */}
           <div className="flex items-center justify-between px-2">
             <p className="text-xs text-[#6B6B6B] font-medium">
-              {t("showingResults", { shown: payments.length, total: totalCount })}
+              {totalPages > 1
+                ? `Showing ${pageStart}-${pageEnd} of ${totalCount}`
+                : t("showingResults", { shown: payments.length, total: totalCount })}
             </p>
           </div>
 
@@ -501,9 +534,29 @@ export default function PaymentHistoryPage() {
             </div>
           )}
 
-          {totalCount > LIMIT && (
-            <div className="flex items-center justify-center py-6">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#A0A0A0]">End of list (Showing {LIMIT} most recent)</p>
+          {totalPages > 1 && (
+            <div className="flex flex-col items-center justify-between gap-3 border-t border-[#F0F0F0] py-6 sm:flex-row">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-[#A0A0A0]">
+                Page {currentPage} of {totalPages}
+              </p>
+              <nav className="flex items-center gap-2" aria-label="Transaction history pagination">
+                <button
+                  type="button"
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage <= 1 || isFilterPending}
+                  className="inline-flex min-h-10 items-center rounded-xl border border-[#E8E8E8] bg-white px-4 text-[10px] font-bold uppercase tracking-widest text-[#0A0A0A] transition-all hover:bg-[#F5F5F5] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage >= totalPages || isFilterPending}
+                  className="inline-flex min-h-10 items-center rounded-xl bg-[#0A0A0A] px-4 text-[10px] font-bold uppercase tracking-widest text-white transition-all hover:bg-[#2A2A2A] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </nav>
             </div>
           )}
         </div>

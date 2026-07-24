@@ -1,5 +1,5 @@
 import { getTranslations } from "next-intl/server";
-import SettingsDashboardClient from "./SettingsDashboardClient";
+import SettingsWidget from "./SettingsWidget";
 
 export async function generateMetadata() {
   const t = await getTranslations("settingsPage");
@@ -11,5 +11,5 @@ export async function generateMetadata() {
 }
 
 export default function SettingsPage() {
-  return <SettingsDashboardClient />;
+  return <SettingsWidget />;
 }
