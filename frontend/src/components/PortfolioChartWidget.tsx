@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, type Variants } from 'framer-motion';
 import {
   PieChart,
   Pie,
@@ -107,7 +107,7 @@ export function PortfolioChartWidget({
   );
 
   // Container animation variants
-  const containerVariants = {
+  const containerVariants: Variants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
@@ -118,7 +118,7 @@ export function PortfolioChartWidget({
     },
   };
 
-  const itemVariants = {
+  const itemVariants: Variants = {
     hidden: { opacity: 0, y: 20 },
     visible: {
       opacity: 1,
@@ -228,7 +228,7 @@ export function PortfolioChartWidget({
                   />
                   <Legend
                     formatter={(value, entry) => {
-                      const asset = entry.payload.payload as PortfolioAsset;
+                      const asset = (entry as unknown as { payload: { payload: PortfolioAsset } }).payload.payload;
                       return `${asset.symbol} (${asset.percentage.toFixed(1)}%)`;
                     }}
                     wrapperStyle={{

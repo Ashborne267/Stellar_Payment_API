@@ -7,11 +7,12 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useState,
   ReactNode,
 } from "react";
 
 export type MultisigApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "processing";
-export type MultisigStep = "review" | "sign" | "submit" | "confirm" | "error";
+export type MultisigStep = "review" | "sign" | "submit" | "processing" | "confirm" | "error";
 
 export interface MultisigSigner {
   id: string;
@@ -175,25 +176,22 @@ interface MultisigProviderProps {
 }
 
 export function MultisigProvider({ children, networkPassphrase }: MultisigProviderProps) {
-  const [transaction, setTransaction] = useState<MultisigTransaction | null>(null);
-  const [currentStep, setCurrentStep] = useState<MultisigStep>("review");
-  const [isLoading, setIsLoading] = useState(false);
+  const [state, dispatch] = useReducer(multisigReducer, INITIAL_STATE);
   const [isPendingConfirmation, setIsPendingConfirmation] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
-  const [isVisible, setIsVisible] = useState(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const clearError = useCallback(() => {
     dispatch({ type: "CLEAR_ERROR" });
   }, []);
 
+  const setCurrentStep = useCallback((step: MultisigStep) => {
+    dispatch({ type: "SET_STEP", payload: step });
+  }, []);
+
   const resetModal = useCallback(() => {
-    setTransaction(null);
-    setCurrentStep("review");
-    setIsLoading(false);
+    dispatch({ type: "RESET" });
     setIsPendingConfirmation(false);
-    setError(null);
-    setIsVisible(false);
   }, []);
 
   const setTransactionSafe = useCallback((newTransaction: MultisigTransaction | null) => {
@@ -306,10 +304,10 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
       dispatch({ type: "SET_STEP", payload: "error" });
       console.error("Submission error:", err);
     } finally {
-      setIsLoading(false);
+      dispatch({ type: "SET_LOADING", payload: false });
       setIsPendingConfirmation(false);
     }
-  }, []);
+  }, [clearError, setTransactionSafe]);
 
   const retryAction = useCallback(() => {
     dispatch({ type: "CLEAR_ERROR" });
@@ -402,8 +400,6 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
       {children}
     </MultisigContext.Provider>
   );
-
-  return <MultisigContext.Provider value={value}>{children}</MultisigContext.Provider>;
 }
 
 // ─── Hooks ───────────────────────────────────────────────────────────────────

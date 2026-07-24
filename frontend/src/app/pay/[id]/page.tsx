@@ -547,7 +547,7 @@ export default function PaymentPage() {
                       {t("completePayment")}
                     </p>
                     <p className="text-sm text-[#6B6B6B]">
-                      {payment.description ?? t("paymentRequest")}
+                      {t("paymentRequest")}
                     </p>
                   </div>
                   {activeProvider ? (

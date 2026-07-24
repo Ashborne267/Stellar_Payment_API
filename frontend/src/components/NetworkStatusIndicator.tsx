@@ -148,8 +148,8 @@ export const NetworkStatusIndicator: React.FC<
       tabIndex={enableKeyboardNavigation ? 0 : undefined}
       onHoverStart={() => setIsHovered(true)}
       onHoverEnd={() => setIsHovered(false)}
-      onFocusStart={() => setIsFocused(true)}
-      onFocusEnd={() => setIsFocused(false)}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
     >
       {/* Background hover effect */}
       {enableMicroInteractions && (
