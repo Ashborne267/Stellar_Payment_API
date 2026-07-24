@@ -1,9 +1,26 @@
 "use client";
 
-import { useState } from "react";
-import { SupportPanel } from "./SupportPanel";
+import { useState, Suspense, lazy } from "react";
+
+// Lazy-load SupportPanel so its heavy dependencies (framer-motion, stellar SDK,
+// balance-sync hook) are excluded from the initial bundle and only fetched when
+// the user opens the chat for the first time. (#1204)
+const SupportPanel = lazy(() =>
+  import("./SupportPanel").then((m) => ({ default: m.SupportPanel }))
+);
 
 const SUPPORT_EMAIL = "support@stellarpayment.app";
+
+function SupportPanelFallback() {
+  return (
+    <div className="flex flex-col gap-4 py-2" aria-busy="true" aria-label="Loading support panel">
+      <div className="h-4 w-24 animate-pulse rounded bg-white/10" />
+      <div className="h-10 w-full animate-pulse rounded-xl bg-white/10" />
+      <div className="h-16 w-full animate-pulse rounded-xl bg-white/10" />
+      <div className="h-10 w-full animate-pulse rounded-xl bg-white/10" />
+    </div>
+  );
+}
 
 export default function SupportOverlay() {
   const [open, setOpen] = useState(false);
@@ -28,7 +45,9 @@ export default function SupportOverlay() {
               Need help? Send us a message or tip to get priority support.
             </p>
             <div className="mt-4">
-              <SupportPanel />
+              <Suspense fallback={<SupportPanelFallback />}>
+                <SupportPanel />
+              </Suspense>
             </div>
             <a
               href={`mailto:${SUPPORT_EMAIL}`}

@@ -1,11 +1,17 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense, lazy } from "react";
 import { useWallet } from "@/lib/wallet-context";
 import { getAccountBalances, type AssetBalance } from "@/lib/stellar";
 import { Spinner } from "./ui/Spinner";
-import { TransactionResultModal } from "./TransactionResultModal";
 import { toast } from "sonner";
+
+// Lazy-load the modal so its heroicons + framer-motion chunks are only
+// fetched after a successful transaction, keeping the panel's initial
+// bundle lean. (#1204)
+const TransactionResultModal = lazy(() =>
+  import("./TransactionResultModal").then((m) => ({ default: m.TransactionResultModal }))
+);
 import { motion, AnimatePresence } from "framer-motion";
 import { useBalanceSync } from "@/hooks/useBalanceSync";
 
@@ -236,14 +242,16 @@ export function SupportPanel() {
         </button>
       </div>
 
-      <TransactionResultModal
-        isOpen={showResultModal}
-        onClose={() => setShowResultModal(false)}
-        txHash={txHash}
-        amount={amount}
-        assetCode={assetCode}
-        recipientDisplayName="NovaSupport Admin"
-      />
+      <Suspense fallback={null}>
+        <TransactionResultModal
+          isOpen={showResultModal}
+          onClose={() => setShowResultModal(false)}
+          txHash={txHash}
+          amount={amount}
+          assetCode={assetCode}
+          recipientDisplayName="NovaSupport Admin"
+        />
+      </Suspense>
     </div>
   );
 }
