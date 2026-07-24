@@ -12,9 +12,11 @@ import FirstApiKeyModal from "@/components/FirstApiKeyModal";
 import FirstPaymentCelebration from "@/components/FirstPaymentCelebration";
 import PaymentMetrics from "@/components/PaymentMetrics";
 import PaymentsTabs from "@/components/PaymentsTabs";
+import FiatOnrampModal from "@/components/FiatOnrampModal";
 
 export default function DashboardPage() {
   const [isFirstKeyModalOpen, setIsFirstKeyModalOpen] = useState(false);
+  const [isOnrampModalOpen, setIsOnrampModalOpen] = useState(false);
   const hydrated = useMerchantHydrated();
   const apiKey = useMerchantApiKey();
   const [loading, setLoading] = useState(true);
@@ -70,6 +72,27 @@ export default function DashboardPage() {
             Create Link
             <div className="absolute inset-0 -z-10 bg-white/20 opacity-0 transition-opacity group-hover:opacity-100" />
           </Link>
+
+          <button
+            type="button"
+            onClick={() => setIsOnrampModalOpen(true)}
+            className="flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/5 px-5 py-3 text-sm font-medium text-slate-300 transition-all hover:bg-white/10 hover:text-white"
+          >
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            Buy / Deposit
+          </button>
 
           <Link
             href="/docs"
@@ -192,6 +215,10 @@ export default function DashboardPage() {
       <FirstApiKeyModal
         isOpen={isFirstKeyModalOpen}
         onClose={() => setIsFirstKeyModalOpen(false)}
+      />
+      <FiatOnrampModal
+        isOpen={isOnrampModalOpen}
+        onClose={() => setIsOnrampModalOpen(false)}
       />
       <FirstPaymentCelebration />
     </div>
