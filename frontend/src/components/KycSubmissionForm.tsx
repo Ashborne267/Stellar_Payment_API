@@ -20,6 +20,12 @@ const STEP_LABEL_KEYS: Record<KycStep, string> = {
   review: "review",
 };
 
+const STEP_STATUS_KEYS: Record<string, string> = {
+  completed: "completed",
+  current: "current",
+  upcoming: "upcoming",
+};
+
 const stepVariants: Variants = {
   enter: (dir: number) => ({
     x: dir > 0 ? 48 : -48,
@@ -78,7 +84,7 @@ function Field({
 }
 
 function KycSubmissionForm() {
-  const t = useTranslations();
+  const t = useTranslations("kycForm");
   const uid = useId();
   const [state, dispatch] = useReducer(kycFlowReducer, initialKycFlowState);
   const [direction, setDirection] = useState(1);
@@ -91,8 +97,8 @@ function KycSubmissionForm() {
     const errs: Record<string, string> = {};
 
     if (state.currentStep === "personal") {
-      if (!state.personal.firstName.trim()) errs.firstName = t("required") || "Required";
-      if (!state.personal.lastName.trim()) errs.lastName = t("required") || "Required";
+      if (!state.personal.firstName.trim()) errs.firstName = t("required");
+      if (!state.personal.lastName.trim()) errs.lastName = t("required");
     }
 
     setStepErrors(errs);
@@ -101,7 +107,7 @@ function KycSubmissionForm() {
 
   const goNext = useCallback(() => {
     if (!validateCurrentStep()) {
-      setAnnouncement(t("validationError") || "Please fill required fields");
+      setAnnouncement(t("validationError"));
       return;
     }
     if (stepIndex < TOTAL_STEPS - 1) {
@@ -110,7 +116,7 @@ function KycSubmissionForm() {
       setStepErrors({});
       const nextStep = STEPS[stepIndex + 1]!;
       setAnnouncement(
-        `${t("step") || "Step"} ${stepIndex + 2} ${t("of") || "of"} ${TOTAL_STEPS}: ${t(STEP_LABEL_KEYS[nextStep]) || nextStep}`,
+        `${t("step")} ${stepIndex + 2} ${t("of")} ${TOTAL_STEPS}: ${t(STEP_LABEL_KEYS[nextStep])}`,
       );
     }
   }, [validateCurrentStep, stepIndex, t]);
@@ -125,7 +131,7 @@ function KycSubmissionForm() {
 
   const handleSubmit = useCallback(async () => {
     dispatch({ type: "SUBMIT" });
-    setAnnouncement(t("submitting") || "Submitting...");
+    setAnnouncement(t("submitting"));
 
     try {
       const res = await fetch("/api/kyc", {
@@ -141,11 +147,11 @@ function KycSubmissionForm() {
         }),
       });
 
-      if (!res.ok) throw new Error(t("submitError") || "Submission failed");
+      if (!res.ok) throw new Error(t("submitError"));
 
       dispatch({ type: "SUBMIT_SUCCESS", submittedAt: new Date().toISOString() });
-      setAnnouncement(t("successTitle") || "KYC submitted successfully!");
-      toast.success(t("successTitle") || "KYC submitted successfully!");
+      setAnnouncement(t("successTitle"));
+      toast.success(t("successTitle"));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       dispatch({ type: "SUBMIT_FAILURE", error: msg });
@@ -159,7 +165,7 @@ function KycSubmissionForm() {
       <div
         className="w-full max-w-2xl mx-auto"
         role="region"
-        aria-label={t("kycForm") || "KYC Submission Form"}
+        aria-label={t("formTitle")}
       >
         <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
           {announcement}
@@ -195,10 +201,7 @@ function KycSubmissionForm() {
           <h2 className="text-2xl font-bold text-pluto-900" aria-live="assertive">
             {t("successTitle")}
           </h2>
-          <p className="text-pluto-600">
-            {t("successDescription") ||
-              "Your KYC verification has been submitted and is under review."}
-          </p>
+          <p className="text-pluto-600">{t("successDescription")}</p>
 
           <button
             type="button"
@@ -216,7 +219,7 @@ function KycSubmissionForm() {
     <div
       className="w-full max-w-2xl mx-auto"
       role="region"
-      aria-label={t("kycForm") || "KYC Submission Form"}
+      aria-label={t("formTitle")}
     >
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {announcement}
@@ -228,26 +231,34 @@ function KycSubmissionForm() {
           aria-valuenow={stepIndex + 1}
           aria-valuemin={1}
           aria-valuemax={TOTAL_STEPS}
-          aria-label={`${t("step") || "Step"} ${stepIndex + 1} ${t("of") || "of"} ${TOTAL_STEPS}: ${t(STEP_LABEL_KEYS[state.currentStep]) || state.currentStep}`}
+          aria-label={`${t("step")} ${stepIndex + 1} ${t("of")} ${TOTAL_STEPS}: ${t(STEP_LABEL_KEYS[state.currentStep])}`}
           className="space-y-2"
         >
           <div className="flex justify-between text-xs text-pluto-600">
             <span>
-              {stepIndex + 1} of {TOTAL_STEPS}
+              {stepIndex + 1} {t("of")} {TOTAL_STEPS}
             </span>
           </div>
-          <div className="flex gap-2" role="list" aria-label={t("steps") || "Steps"}>
-            {STEPS.map((s, i) => (
-              <div
-                key={s}
-                role="listitem"
-                aria-label={`${t(STEP_LABEL_KEYS[s]) || s} – ${i < stepIndex ? "completed" : i === stepIndex ? "current" : "upcoming"}`}
-                aria-current={i === stepIndex ? "step" : undefined}
-                className={`h-2 flex-1 rounded-full transition-colors duration-300 ${
-                  i <= stepIndex ? "bg-pluto-600" : "bg-pluto-100"
-                }`}
-              />
-            ))}
+          <div className="flex gap-2" role="list" aria-label={t("steps")}>
+            {STEPS.map((s, i) => {
+              const statusKey =
+                i < stepIndex
+                  ? STEP_STATUS_KEYS.completed
+                  : i === stepIndex
+                    ? STEP_STATUS_KEYS.current
+                    : STEP_STATUS_KEYS.upcoming;
+              return (
+                <div
+                  key={s}
+                  role="listitem"
+                  aria-label={`${t(STEP_LABEL_KEYS[s])} – ${t(statusKey)}`}
+                  aria-current={i === stepIndex ? "step" : undefined}
+                  className={`h-2 flex-1 rounded-full transition-colors duration-300 ${
+                    i <= stepIndex ? "bg-pluto-600" : "bg-pluto-100"
+                  }`}
+                />
+              );
+            })}
           </div>
         </div>
 
@@ -270,7 +281,7 @@ function KycSubmissionForm() {
                 <div className="grid grid-cols-2 gap-4">
                   <Field
                     id={`${uid}-firstName`}
-                    label={t("firstName") || "First Name"}
+                    label={t("firstName")}
                     error={stepErrors.firstName}
                   >
                     <input
@@ -292,7 +303,7 @@ function KycSubmissionForm() {
 
                   <Field
                     id={`${uid}-lastName`}
-                    label={t("lastName") || "Last Name"}
+                    label={t("lastName")}
                     error={stepErrors.lastName}
                   >
                     <input
@@ -313,7 +324,7 @@ function KycSubmissionForm() {
                   </Field>
                 </div>
 
-                <Field id={`${uid}-email`} label={t("email") || "Email"}>
+                <Field id={`${uid}-email`} label={t("email")}>
                   <input
                     id={`${uid}-email`}
                     type="email"
@@ -326,7 +337,7 @@ function KycSubmissionForm() {
                   />
                 </Field>
 
-                <Field id={`${uid}-dateOfBirth`} label={t("dateOfBirth") || "Date of Birth"}>
+                <Field id={`${uid}-dateOfBirth`} label={t("dateOfBirth")}>
                   <input
                     id={`${uid}-dateOfBirth`}
                     type="date"
@@ -346,7 +357,7 @@ function KycSubmissionForm() {
                   {t("addressInfo")}
                 </h2>
 
-                <Field id={`${uid}-street`} label={t("street") || "Street"}>
+                <Field id={`${uid}-street`} label={t("street")}>
                   <input
                     id={`${uid}-street`}
                     type="text"
@@ -360,7 +371,7 @@ function KycSubmissionForm() {
                 </Field>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <Field id={`${uid}-city`} label={t("city") || "City"}>
+                  <Field id={`${uid}-city`} label={t("city")}>
                     <input
                       id={`${uid}-city`}
                       type="text"
@@ -373,7 +384,7 @@ function KycSubmissionForm() {
                     />
                   </Field>
 
-                  <Field id={`${uid}-addressState`} label={t("state") || "State"}>
+                  <Field id={`${uid}-addressState`} label={t("state")}>
                     <input
                       id={`${uid}-addressState`}
                       type="text"
@@ -388,7 +399,7 @@ function KycSubmissionForm() {
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                  <Field id={`${uid}-postalCode`} label={t("postalCode") || "Postal Code"}>
+                  <Field id={`${uid}-postalCode`} label={t("postalCode")}>
                     <input
                       id={`${uid}-postalCode`}
                       type="text"
@@ -401,7 +412,7 @@ function KycSubmissionForm() {
                     />
                   </Field>
 
-                  <Field id={`${uid}-country`} label={t("country") || "Country"}>
+                  <Field id={`${uid}-country`} label={t("country")}>
                     <input
                       id={`${uid}-country`}
                       type="text"
@@ -423,7 +434,7 @@ function KycSubmissionForm() {
                   {t("documents")}
                 </h2>
 
-                <Field id={`${uid}-idType`} label={t("idType") || "ID Type"}>
+                <Field id={`${uid}-idType`} label={t("idType")}>
                   <select
                     id={`${uid}-idType`}
                     value={state.documents.idType}
@@ -441,16 +452,14 @@ function KycSubmissionForm() {
                     }
                     className="rounded-xl border border-pluto-200 px-4 py-3 focus:outline-none focus:ring-2 focus:ring-pluto-400"
                   >
-                    <option value="">{t("selectIdType") || "Select ID type"}</option>
-                    <option value="passport">{t("passport") || "Passport"}</option>
-                    <option value="drivers_license">
-                      {t("driversLicense") || "Driver's License"}
-                    </option>
-                    <option value="national_id">{t("nationalId") || "National ID"}</option>
+                    <option value="">{t("selectIdType")}</option>
+                    <option value="passport">{t("passport")}</option>
+                    <option value="drivers_license">{t("driversLicense")}</option>
+                    <option value="national_id">{t("nationalId")}</option>
                   </select>
                 </Field>
 
-                <Field id={`${uid}-idNumber`} label={t("idNumber") || "ID Number"}>
+                <Field id={`${uid}-idNumber`} label={t("idNumber")}>
                   <input
                     id={`${uid}-idNumber`}
                     type="text"
@@ -463,7 +472,7 @@ function KycSubmissionForm() {
                   />
                 </Field>
 
-                <Field id={`${uid}-idFront`} label={t("idFront") || "ID Front"}>
+                <Field id={`${uid}-idFront`} label={t("idFront")}>
                   <input
                     id={`${uid}-idFront`}
                     type="file"
@@ -478,7 +487,7 @@ function KycSubmissionForm() {
                   />
                 </Field>
 
-                <Field id={`${uid}-idBack`} label={t("idBack") || "ID Back"}>
+                <Field id={`${uid}-idBack`} label={t("idBack")}>
                   <input
                     id={`${uid}-idBack`}
                     type="file"
@@ -493,7 +502,7 @@ function KycSubmissionForm() {
                   />
                 </Field>
 
-                <Field id={`${uid}-selfie`} label={t("selfie") || "Selfie"}>
+                <Field id={`${uid}-selfie`} label={t("selfie")}>
                   <input
                     id={`${uid}-selfie`}
                     type="file"
@@ -518,20 +527,17 @@ function KycSubmissionForm() {
 
                 <dl className="divide-y divide-pluto-100 rounded-xl border border-pluto-100 text-sm">
                   {[
-                    { label: t("firstName") || "First Name", value: state.personal.firstName },
-                    { label: t("lastName") || "Last Name", value: state.personal.lastName },
-                    {
-                      label: t("dateOfBirth") || "Date of Birth",
-                      value: state.personal.dateOfBirth,
-                    },
-                    { label: t("city") || "City", value: state.address.city },
-                    { label: t("country") || "Country", value: state.address.country },
-                    { label: t("idType") || "ID Type", value: state.documents.idType },
-                    { label: t("idNumber") || "ID Number", value: state.documents.idNumber },
+                    { label: t("firstName"), value: state.personal.firstName },
+                    { label: t("lastName"), value: state.personal.lastName },
+                    { label: t("dateOfBirth"), value: state.personal.dateOfBirth },
+                    { label: t("city"), value: state.address.city },
+                    { label: t("country"), value: state.address.country },
+                    { label: t("idType"), value: state.documents.idType },
+                    { label: t("idNumber"), value: state.documents.idNumber },
                   ].map(({ label, value }) => (
                     <div key={label} className="flex justify-between px-4 py-2">
                       <dt className="font-medium text-pluto-600">{label}</dt>
-                      <dd className="text-pluto-900">{value || "—"}</dd>
+                      <dd className="text-pluto-900">{value || t("dash")}</dd>
                     </div>
                   ))}
                 </dl>
@@ -556,7 +562,7 @@ function KycSubmissionForm() {
             type="button"
             onClick={goBack}
             disabled={stepIndex === 0}
-            aria-label={stepIndex > 0 ? `${t("back")} to ${t(STEP_LABEL_KEYS[STEPS[stepIndex - 1]!]) || STEPS[stepIndex - 1]}` : t("back")}
+            aria-label={stepIndex > 0 ? `${t("back")} ${t(STEP_LABEL_KEYS[STEPS[stepIndex - 1]!])}` : t("back")}
             className="flex-1 rounded-xl border border-pluto-200 bg-white px-6 py-3 font-semibold text-pluto-900 hover:bg-pluto-50 focus:outline-none focus:ring-2 focus:ring-pluto-400 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {t("back")}
@@ -566,7 +572,7 @@ function KycSubmissionForm() {
             <button
               type="button"
               onClick={goNext}
-              aria-label={`${t("next")}: ${t(STEP_LABEL_KEYS[STEPS[stepIndex + 1]!]) || STEPS[stepIndex + 1]}`}
+              aria-label={`${t("next")}: ${t(STEP_LABEL_KEYS[STEPS[stepIndex + 1]!])}`}
               className="flex-1 rounded-xl bg-pluto-600 px-6 py-3 font-semibold text-white hover:bg-pluto-700 focus:outline-none focus:ring-2 focus:ring-pluto-400"
             >
               {t("next")}
@@ -587,7 +593,7 @@ function KycSubmissionForm() {
                     transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                     aria-hidden="true"
                   />
-                  {t("submitting") || "Submitting..."}
+                  {t("submitting")}
                 </span>
               ) : (
                 t("submit")
@@ -597,7 +603,7 @@ function KycSubmissionForm() {
         </div>
 
         <div id={`${uid}-submit-status`} className="sr-only" aria-live="polite">
-          {state.isSubmitting && (t("submitting") || "Submitting your KYC information...")}
+          {state.isSubmitting && t("submitting")}
         </div>
       </div>
     </div>
