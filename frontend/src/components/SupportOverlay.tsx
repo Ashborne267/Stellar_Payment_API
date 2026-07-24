@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, Suspense, lazy } from "react";
+import { useTranslations } from "next-intl";
 
 // Lazy-load SupportPanel so its heavy dependencies (framer-motion, stellar SDK,
 // balance-sync hook) are excluded from the initial bundle and only fetched when
@@ -23,6 +24,7 @@ function SupportPanelFallback() {
 }
 
 export default function SupportOverlay() {
+  const t = useTranslations("support");
   const [open, setOpen] = useState(false);
 
   return (
@@ -31,18 +33,18 @@ export default function SupportOverlay() {
         {open && (
           <section
             id="support-overlay-panel"
-            aria-label="Help and support panel"
+            aria-label={t("panelAriaLabel")}
             className="w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl backdrop-blur"
             data-testid="support-overlay-panel"
           >
             <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-mint">
-              Help &amp; Support
+              {t("heading")}
             </p>
             <h2 className="mt-2 text-base font-semibold text-white">
-              Need help with payments?
+              {t("title")}
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-300">
-              Need help? Send us a message or tip to get priority support.
+              {t("description")}
             </p>
             <div className="mt-4">
               <Suspense fallback={<SupportPanelFallback />}>
@@ -53,7 +55,7 @@ export default function SupportOverlay() {
               href={`mailto:${SUPPORT_EMAIL}`}
               className="mt-6 inline-flex w-full justify-center rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-[10px] uppercase tracking-widest font-semibold text-slate-400 transition-colors hover:bg-white/10"
             >
-              Contact via Email
+              {t("contactEmail")}
             </a>
           </section>
         )}
@@ -62,7 +64,7 @@ export default function SupportOverlay() {
           type="button"
           onClick={() => setOpen((prev) => !prev)}
           className="inline-flex h-14 w-14 items-center justify-center rounded-full border border-mint/35 bg-mint/15 text-mint shadow-[0_10px_30px_rgba(94,242,192,0.28)] transition-all hover:scale-[1.03] hover:bg-mint/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-mint/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black"
-          aria-label={open ? "Close support chat" : "Open support chat"}
+          aria-label={open ? t("closeChat") : t("openChat")}
           aria-expanded={open}
           aria-controls="support-overlay-panel"
           data-testid="support-overlay-toggle"
