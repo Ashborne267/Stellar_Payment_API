@@ -428,5 +428,19 @@
     "dismissLabel": "Dispensar notificacao: {message}",
     "notificationLabel": "Notificacao: {message}",
     "timestampLabel": "Carimbo de data/hora: {timestamp}"
+  },
+  "permissions": {
+    "manager": "Permissoes do Usuario",
+    "loading": "Carregando permissoes…",
+    "readOnlyNotice": "Voce tem acesso somente leitura. Contate um administrador para alterar as permissoes.",
+    "updateSuccess": "Permissao atualizada",
+    "updateError": "Falha ao atualizar a permissao",
+    "updating": "Atualizando permissao…",
+    "category": {
+      "payment": "Pagamentos",
+      "webhook": "Webhooks",
+      "analytics": "Analise",
+      "admin": "Administracao"
+    }
   }
 }

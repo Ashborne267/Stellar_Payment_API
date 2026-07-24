@@ -1327,7 +1327,7 @@ export default function SettingsWidget() {
 
           {/* Permissions Tab */}
           {activeTab === "permissions" && (
-            <UserPermissionsManager />
+            <UserPermissionsManager userId={apiKey} />
           )}
 
           {/* Danger Tab */}

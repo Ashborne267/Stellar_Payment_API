@@ -7,7 +7,7 @@ import { usePermissionsStore } from "@/hooks/usePermissionsStore";
 import { toast } from "sonner";
 
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: (namespace: string) => (key: string) => `${namespace}.${key}`,
 }));
 
 vi.mock("sonner", () => ({
@@ -29,7 +29,7 @@ const basePermissions = [
 describe("UserPermissionsManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    usePermissionsStore.setState({ permissions: basePermissions });
+    usePermissionsStore.setState({ permissions: basePermissions, isHydrated: true });
   });
 
   it("renders manager region and permissions", () => {

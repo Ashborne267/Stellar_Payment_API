@@ -428,5 +428,19 @@
     "dismissLabel": "Dismiss notification: {message}",
     "notificationLabel": "Notification: {message}",
     "timestampLabel": "Timestamp: {timestamp}"
+  },
+  "permissions": {
+    "manager": "User Permissions",
+    "loading": "Loading permissions…",
+    "readOnlyNotice": "You have read-only access. Contact an administrator to change permissions.",
+    "updateSuccess": "Permission updated",
+    "updateError": "Failed to update permission",
+    "updating": "Updating permission…",
+    "category": {
+      "payment": "Payments",
+      "webhook": "Webhooks",
+      "analytics": "Analytics",
+      "admin": "Administration"
+    }
   }
 }

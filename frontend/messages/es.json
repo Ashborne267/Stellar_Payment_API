@@ -428,5 +428,19 @@
     "dismissLabel": "Descartar notificación: {message}",
     "notificationLabel": "Notificación: {message}",
     "timestampLabel": "Marca de tiempo: {timestamp}"
+  },
+  "permissions": {
+    "manager": "Permisos de Usuario",
+    "loading": "Cargando permisos…",
+    "readOnlyNotice": "Tienes acceso de solo lectura. Contacta a un administrador para cambiar los permisos.",
+    "updateSuccess": "Permiso actualizado",
+    "updateError": "Error al actualizar el permiso",
+    "updating": "Actualizando permiso…",
+    "category": {
+      "payment": "Pagos",
+      "webhook": "Webhooks",
+      "analytics": "Analítica",
+      "admin": "Administración"
+    }
   }
 }
