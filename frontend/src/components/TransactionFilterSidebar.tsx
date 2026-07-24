@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useId } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -49,12 +49,12 @@ const ASSET_OPTIONS = ["all", "XLM", "USDC"] as const;
 
 // ─── Animation variants ───────────────────────────────────────────────────────
 
-const filterListVariants = {
+const filterListVariants: Variants = {
   hidden: {},
   visible: { transition: { staggerChildren: 0.06 } },
 };
 
-const filterItemVariants = {
+const filterItemVariants: Variants = {
   hidden: { opacity: 0, y: 8 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.2, ease: "easeOut" } },
 };

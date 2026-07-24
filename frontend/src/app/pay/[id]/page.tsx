@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
 import { useParams, useRouter } from "next/navigation";
@@ -23,9 +23,17 @@ import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { QRCodeSVG } from "qrcode.react";
 import { localeToLanguageTag } from "@/i18n/config";
-import { PaymentSuccessAnimation } from "@/components/PaymentSuccessAnimation";
 import { useCheckoutPresence } from "@/lib/useCheckoutPresence";
 import { Modal } from "@/components/ui/Modal";
+
+// Lazy-load PaymentSuccessAnimation so its dependencies (framer-motion success
+// variants, canvas-confetti) are excluded from the initial checkout bundle and
+// only fetched the first time a payment actually succeeds. (#1179)
+const PaymentSuccessAnimation = lazy(() =>
+  import("@/components/PaymentSuccessAnimation").then((m) => ({
+    default: m.PaymentSuccessAnimation,
+  }))
+);
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "testnet";
@@ -161,6 +169,9 @@ export default function PaymentPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [showQrModal, setShowQrModal] = useState(false);
   const [isOptimisticSuccess, setIsOptimisticSuccess] = useState(false);
+  // Tracks whether the success animation has ever been needed, so its lazy
+  // chunk is only fetched on first success rather than on initial page load.
+  const [hasSucceededOnce, setHasSucceededOnce] = useState(false);
   const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
@@ -187,6 +198,10 @@ export default function PaymentPage() {
       setIsOptimisticSuccess(true);
     }
   }, [payment]);
+
+  useEffect(() => {
+    if (isOptimisticSuccess) setHasSucceededOnce(true);
+  }, [isOptimisticSuccess]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -386,14 +401,18 @@ export default function PaymentPage() {
 
   return (
     <>
-      <PaymentSuccessAnimation
-        show={isOptimisticSuccess}
-        onComplete={() => setIsOptimisticSuccess(false)}
-        amount={payment?.amount != null ? String(payment.amount) : undefined}
-        asset={payment?.asset}
-        txId={payment?.tx_id ?? undefined}
-        isOptimistic={payment?.status !== "confirmed" && payment?.status !== "completed"}
-      />
+      {hasSucceededOnce && (
+        <Suspense fallback={null}>
+          <PaymentSuccessAnimation
+            show={isOptimisticSuccess}
+            onComplete={() => setIsOptimisticSuccess(false)}
+            amount={payment?.amount != null ? String(payment.amount) : undefined}
+            asset={payment?.asset}
+            txId={payment?.tx_id ?? undefined}
+            isOptimistic={payment?.status !== "confirmed" && payment?.status !== "completed"}
+          />
+        </Suspense>
+      )}
 
       <AnimatePresence>
         {isProcessing && !isOptimisticSuccess && (
@@ -528,7 +547,7 @@ export default function PaymentPage() {
                       {t("completePayment")}
                     </p>
                     <p className="text-sm text-[#6B6B6B]">
-                      {payment.description ?? t("paymentRequest")}
+                      {t("paymentRequest")}
                     </p>
                   </div>
                   {activeProvider ? (
@@ -589,6 +608,7 @@ export default function PaymentPage() {
                         </div>
                       </motion.div>
                     </div>
+                      )}
 
                       {pathQuoteLoading && <p className="text-center text-xs text-[#6B6B6B]">Checking payment routes…</p>}
                       {pathQuoteError && <p className="text-center text-xs text-red-500">{pathQuoteError}</p>}
@@ -706,5 +726,4 @@ export default function PaymentPage() {
     </>
   );
 }
-
 
