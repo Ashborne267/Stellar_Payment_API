@@ -343,6 +343,7 @@
     "eyebrowAccount": "Account",
     "title": "Settings",
     "description": "Manage your credentials, branding, and integrations.",
+    "loadingSettings": "Loading settings…",
     "noApiKeyTitle": "No API key found",
     "noApiKeyDescription": "Register a merchant account first to manage your credentials here.",
     "registerAsMerchant": "Register as Merchant",

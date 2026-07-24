@@ -148,10 +148,11 @@ describe("SettingsDashboardClient", () => {
       expect(screen.getByText("noApiKeyTitle")).toBeInTheDocument();
     });
 
-    it("renders nothing while store is not hydrated", () => {
+    it("shows a busy loading skeleton while store is not hydrated", () => {
       vi.mocked(merchantStore).useMerchantHydrated = vi.fn(() => false);
       const { container } = render(<SettingsDashboardClient />);
-      expect(container.firstChild).toBeNull();
+      expect(container.firstChild).toHaveAttribute("aria-busy", "true");
+      expect(screen.getByRole("status")).toHaveTextContent("loadingSettings");
     });
   });
 

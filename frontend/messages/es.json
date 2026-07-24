@@ -343,6 +343,7 @@
     "eyebrowAccount": "Cuenta",
     "title": "Configuración",
     "description": "Administra tus credenciales, marca e integraciones.",
+    "loadingSettings": "Cargando configuración…",
     "noApiKeyTitle": "No se encontró clave API",
     "noApiKeyDescription": "Registra una cuenta de comercio primero para administrar tus credenciales aquí.",
     "registerAsMerchant": "Registrarse como Comercio",

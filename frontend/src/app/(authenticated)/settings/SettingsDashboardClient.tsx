@@ -27,6 +27,7 @@ import DangerZone from "@/components/DangerZone";
 import { EmailReceiptPreview } from "@/components/EmailReceiptPreview";
 import UserPermissionsManager from "@/components/UserPermissionsManager";
 import SettingsPanelSkeleton from "@/components/SettingsPanelSkeleton";
+import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import { Spinner } from "@/components/ui/Spinner";
 import {
   getNextSettingsTab,
@@ -609,7 +610,36 @@ export default function SettingsDashboardClient() {
     [activeTab, focusTab],
   );
 
-  if (!hydrated) return null;
+  if (!hydrated) {
+    return (
+      <div
+        className="flex flex-col gap-8 animate-in fade-in duration-500"
+        aria-busy="true"
+      >
+        <p role="status" aria-live="polite" className="sr-only">
+          {t("loadingSettings")}
+        </p>
+        <SkeletonTheme baseColor="#F0F0F0" highlightColor="#F9F9F9">
+          <div>
+            <Skeleton width={140} height={12} borderRadius={4} />
+            <div className="mt-2">
+              <Skeleton width={220} height={32} borderRadius={6} />
+            </div>
+          </div>
+          <div className="flex flex-col gap-8 lg:flex-row lg:items-start mt-8">
+            <div className="hidden lg:flex w-52 shrink-0 flex-col gap-1">
+              {Array.from({ length: navItems.length }).map((_, i) => (
+                <Skeleton key={i} height={44} borderRadius={12} />
+              ))}
+            </div>
+            <div className="flex-1 min-w-0">
+              <SettingsPanelSkeleton />
+            </div>
+          </div>
+        </SkeletonTheme>
+      </div>
+    );
+  }
 
   if (!apiKey) {
     return (
