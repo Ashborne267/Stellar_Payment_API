@@ -214,6 +214,15 @@
       "confirmed": "Confirmado",
       "failed": "Fallido",
       "refunded": "Reembolsado"
+    },
+    "pagination": {
+      "ariaLabel": "Paginación del historial de pagos",
+      "previous": "Página anterior",
+      "next": "Página siguiente",
+      "goToPage": "Ir a la página {page}",
+      "currentPage": "Página actual, página {page}",
+      "pageLabel": "Página {page} de {totalPages}",
+      "range": "Mostrando {start}-{end} de {total}"
     }
   },
   "walletSelector": {
