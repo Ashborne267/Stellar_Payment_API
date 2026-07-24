@@ -10,6 +10,10 @@ import * as displayPreferences from "@/lib/display-preferences";
 
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
+vi.mock("next-intl", () => ({
+  useTranslations: () => (key: string) => key,
+}));
+
 vi.mock("framer-motion", () => ({
   motion: {
     div: ({ children, ...p }: any) => <div {...p}>{children}</div>,
@@ -108,12 +112,19 @@ describe("SettingsPage", () => {
   describe("Rendering", () => {
     it("renders the page heading", async () => {
       render(<SettingsPage />);
-      await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
+      await waitFor(() => expect(screen.getByText("title")).toBeInTheDocument());
     });
 
     it("renders all nav tabs", async () => {
       render(<SettingsPage />);
-      const labels = ["API Keys", "Branding", "Display", "Webhooks", "Permissions", "Danger Zone"];
+      const labels = [
+        "navApiKeys",
+        "navBranding",
+        "navDisplay",
+        "navWebhooks",
+        "navPermissions",
+        "navDanger",
+      ];
       await waitFor(() => {
         for (const label of labels) {
           expect(screen.getAllByText(label).length).toBeGreaterThan(0);
@@ -124,14 +135,14 @@ describe("SettingsPage", () => {
     it("shows API Keys panel by default", async () => {
       render(<SettingsPage />);
       await waitFor(() =>
-        expect(screen.getByText("API Authentication")).toBeInTheDocument()
+        expect(screen.getByText("apiAuthTitle")).toBeInTheDocument()
       );
     });
 
     it("shows no-API-key message when apiKey is absent", () => {
       vi.mocked(merchantStore).useMerchantApiKey = vi.fn(() => null);
       render(<SettingsPage />);
-      expect(screen.getByText("No API key found")).toBeInTheDocument();
+      expect(screen.getByText("noApiKeyTitle")).toBeInTheDocument();
     });
 
     it("renders nothing while store is not hydrated", () => {
@@ -147,37 +158,37 @@ describe("SettingsPage", () => {
     it("switches to Branding panel on click", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      const tabs = screen.getAllByRole("tab", { name: "Branding" });
+      const tabs = screen.getAllByRole("tab", { name: "navBranding" });
       await user.click(tabs[0]);
       await waitFor(() =>
-        expect(screen.getByText("Checkout Branding")).toBeInTheDocument()
+        expect(screen.getByText("checkoutBrandingTitle")).toBeInTheDocument()
       );
     });
 
     it("switches to Display panel on click", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      const tabs = screen.getAllByRole("tab", { name: "Display" });
+      const tabs = screen.getAllByRole("tab", { name: "navDisplay" });
       await user.click(tabs[0]);
       await waitFor(() =>
-        expect(screen.getByText("Display Preferences")).toBeInTheDocument()
+        expect(screen.getByText("displayPreferencesTitle")).toBeInTheDocument()
       );
     });
 
     it("switches to Webhooks panel on click", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      const tabs = screen.getAllByRole("tab", { name: "Webhooks" });
+      const tabs = screen.getAllByRole("tab", { name: "navWebhooks" });
       await user.click(tabs[0]);
       await waitFor(() =>
-        expect(screen.getByText("Webhook Endpoint")).toBeInTheDocument()
+        expect(screen.getByText("webhookEndpointTitle")).toBeInTheDocument()
       );
     });
 
     it("switches to Permissions panel on click", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      const tabs = screen.getAllByRole("tab", { name: "Permissions" });
+      const tabs = screen.getAllByRole("tab", { name: "navPermissions" });
       await user.click(tabs[0]);
       await waitFor(() =>
         expect(screen.getByTestId("permissions-manager")).toBeInTheDocument()
@@ -187,7 +198,7 @@ describe("SettingsPage", () => {
     it("switches to Danger Zone panel on click", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      const tabs = screen.getAllByRole("tab", { name: "Danger Zone" });
+      const tabs = screen.getAllByRole("tab", { name: "navDanger" });
       await user.click(tabs[0]);
       await waitFor(() =>
         expect(screen.getByTestId("danger-zone")).toBeInTheDocument()
@@ -201,7 +212,7 @@ describe("SettingsPage", () => {
     it("reveals API key on button click", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      await waitFor(() => screen.getByText("API Authentication"));
+      await waitFor(() => screen.getByText("apiAuthTitle"));
 
       const revealBtn = screen.getByRole("button", { name: /reveal/i });
       await user.click(revealBtn);
@@ -211,20 +222,20 @@ describe("SettingsPage", () => {
     it("shows rotate key confirmation flow", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      await waitFor(() => screen.getByText("API Authentication"));
+      await waitFor(() => screen.getByText("apiAuthTitle"));
 
-      await user.click(screen.getByRole("button", { name: /rotate key/i }));
-      expect(screen.getByText("Confirm Action")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /rotateKeyEllipsis/i }));
+      expect(screen.getByText("confirmAction")).toBeInTheDocument();
     });
 
     it("cancels rotation when Cancel clicked", async () => {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      await waitFor(() => screen.getByText("API Authentication"));
+      await waitFor(() => screen.getByText("apiAuthTitle"));
 
-      await user.click(screen.getByRole("button", { name: /rotate key/i }));
-      await user.click(screen.getByRole("button", { name: /cancel/i }));
-      expect(screen.queryByText("Confirm Action")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /rotateKeyEllipsis/i }));
+      await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(screen.queryByText("confirmAction")).not.toBeInTheDocument();
     });
 
     it("calls rotate-key API on confirm", async () => {
@@ -238,9 +249,9 @@ describe("SettingsPage", () => {
       });
 
       render(<SettingsPage />);
-      await waitFor(() => screen.getByText("API Authentication"));
+      await waitFor(() => screen.getByText("apiAuthTitle"));
 
-      await user.click(screen.getByRole("button", { name: /rotate key/i }));
+      await user.click(screen.getByRole("button", { name: /rotateKeyEllipsis/i }));
       await user.click(screen.getByRole("button", { name: /^confirm$/i }));
 
       await waitFor(() =>
@@ -258,8 +269,8 @@ describe("SettingsPage", () => {
     async function openBranding() {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      await user.click(screen.getAllByRole("tab", { name: "Branding" })[0]);
-      await waitFor(() => screen.getByText("Checkout Branding"));
+      await user.click(screen.getAllByRole("tab", { name: "navBranding" })[0]);
+      await waitFor(() => screen.getByText("checkoutBrandingTitle"));
       return user;
     }
 
@@ -274,7 +285,7 @@ describe("SettingsPage", () => {
         ok: true,
         json: async () => ({ branding_config: {} }),
       });
-      await user.click(screen.getByRole("button", { name: /save branding/i }));
+      await user.click(screen.getByRole("button", { name: /saveBranding/i }));
       await waitFor(() =>
         expect(global.fetch).toHaveBeenCalledWith(
           expect.stringContaining("merchant-branding"),
@@ -295,8 +306,8 @@ describe("SettingsPage", () => {
       }));
       const user = userEvent.setup();
       render(<SettingsPage />);
-      await user.click(screen.getAllByRole("tab", { name: "Display" })[0]);
-      await waitFor(() => screen.getByText("Hide trailing cents"));
+      await user.click(screen.getAllByRole("tab", { name: "navDisplay" })[0]);
+      await waitFor(() => screen.getByText("hideTrailingCents"));
 
       await user.click(screen.getByRole("checkbox"));
       expect(setHideCents).toHaveBeenCalledWith(true);
@@ -309,15 +320,15 @@ describe("SettingsPage", () => {
     async function openWebhooks() {
       const user = userEvent.setup();
       render(<SettingsPage />);
-      await user.click(screen.getAllByRole("tab", { name: "Webhooks" })[0]);
-      await waitFor(() => screen.getByText("Webhook Endpoint"));
+      await user.click(screen.getAllByRole("tab", { name: "navWebhooks" })[0]);
+      await waitFor(() => screen.getByText("webhookEndpointTitle"));
       return user;
     }
 
     it("shows validation error for non-HTTPS URL", async () => {
       const user = await openWebhooks();
-      await user.clear(screen.getByLabelText("Endpoint URL"));
-      await user.type(screen.getByLabelText("Endpoint URL"), "http://example.com");
+      await user.clear(screen.getByLabelText("endpointUrl"));
+      await user.type(screen.getByLabelText("endpointUrl"), "http://example.com");
       expect(await screen.findByText("Webhook URL must use HTTPS")).toBeInTheDocument();
     });
 
@@ -327,9 +338,9 @@ describe("SettingsPage", () => {
         ok: true,
         json: async () => ({ webhook_url: "https://example.com/hooks" }),
       });
-      await user.clear(screen.getByLabelText("Endpoint URL"));
-      await user.type(screen.getByLabelText("Endpoint URL"), "https://example.com/hooks");
-      await user.click(screen.getByRole("button", { name: /save url/i }));
+      await user.clear(screen.getByLabelText("endpointUrl"));
+      await user.type(screen.getByLabelText("endpointUrl"), "https://example.com/hooks");
+      await user.click(screen.getByRole("button", { name: /saveUrl/i }));
       await waitFor(() =>
         expect(global.fetch).toHaveBeenCalledWith(
           expect.stringContaining("webhook-settings"),

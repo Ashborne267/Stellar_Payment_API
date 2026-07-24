@@ -8,6 +8,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { useTranslations } from "next-intl";
 import { useOptimisticUpdate } from "@/hooks/useOptimisticUpdate";
 import { useDropzone } from "react-dropzone";
 import Link from "next/link";
@@ -25,6 +26,8 @@ import WebhookHealthIndicator from "@/components/WebhookHealthIndicator";
 import DangerZone from "@/components/DangerZone";
 import { EmailReceiptPreview } from "@/components/EmailReceiptPreview";
 import UserPermissionsManager from "@/components/UserPermissionsManager";
+import SettingsPanelSkeleton from "@/components/SettingsPanelSkeleton";
+import { Spinner } from "@/components/ui/Spinner";
 import {
   getNextSettingsTab,
   getSettingsPanelDomId,
@@ -134,15 +137,16 @@ function EyeIcon({ open }: { open: boolean }) {
   );
 }
 
-const NAV_ITEMS: {
+function buildNavItems(t: (key: string) => string): {
   id: SettingsTab;
   label: string;
   icon: React.ReactNode;
   danger?: boolean;
-}[] = [
+}[] {
+  return [
   {
     id: "api",
-    label: "API Keys",
+    label: t("navApiKeys"),
     icon: (
       <svg
         className="h-4 w-4"
@@ -161,7 +165,7 @@ const NAV_ITEMS: {
   },
   {
     id: "branding",
-    label: "Branding",
+    label: t("navBranding"),
     icon: (
       <svg
         className="h-4 w-4"
@@ -180,7 +184,7 @@ const NAV_ITEMS: {
   },
   {
     id: "display",
-    label: "Display",
+    label: t("navDisplay"),
     icon: (
       <svg
         className="h-4 w-4"
@@ -199,7 +203,7 @@ const NAV_ITEMS: {
   },
   {
     id: "webhooks",
-    label: "Webhooks",
+    label: t("navWebhooks"),
     icon: (
       <svg
         className="h-4 w-4"
@@ -218,7 +222,7 @@ const NAV_ITEMS: {
   },
   {
     id: "permissions",
-    label: "Permissions",
+    label: t("navPermissions"),
     icon: (
       <svg
         className="h-4 w-4"
@@ -237,7 +241,7 @@ const NAV_ITEMS: {
   },
   {
     id: "danger",
-    label: "Danger Zone",
+    label: t("navDanger"),
     icon: (
       <svg
         className="h-4 w-4"
@@ -255,9 +259,12 @@ const NAV_ITEMS: {
     ),
     danger: true,
   },
-];
+  ];
+}
 
 export default function SettingsPage() {
+  const t = useTranslations("settingsPage");
+  const navItems = useMemo(() => buildNavItems(t), [t]);
   const apiKey = useMerchantApiKey();
   const hydrated = useMerchantHydrated();
   const setApiKey = useSetMerchantApiKey();
@@ -609,22 +616,22 @@ export default function SettingsPage() {
       <div className="flex flex-col gap-8 animate-in fade-in duration-500">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-[#6B6B6B] mb-2">
-            Settings
+            {t("eyebrow")}
           </p>
           <h1 className="text-4xl font-bold text-[#0A0A0A] tracking-tight">
-            Merchant Settings
+            {t("title")}
           </h1>
         </div>
         <div className="max-w-md rounded-2xl border border-yellow-200 bg-yellow-50 p-8 flex flex-col gap-4">
-          <p className="font-bold text-yellow-800">No API key found</p>
+          <p className="font-bold text-yellow-800">{t("noApiKeyTitle")}</p>
           <p className="text-sm text-yellow-700">
-            Register a merchant account first to manage your credentials here.
+            {t("noApiKeyDescription")}
           </p>
           <Link
             href="/register"
             className="self-start rounded-xl bg-[#0A0A0A] px-5 py-2.5 text-sm font-bold text-white hover:bg-black transition-all"
           >
-            Register as Merchant
+            {t("registerAsMerchant")}
           </Link>
         </div>
       </div>
@@ -636,13 +643,13 @@ export default function SettingsPage() {
       {/* Page header */}
       <div>
         <p className="text-[10px] font-bold uppercase tracking-[0.4em] text-[#6B6B6B] mb-2">
-          Account
+          {t("eyebrowAccount")}
         </p>
         <h1 className="text-4xl font-bold text-[#0A0A0A] tracking-tight">
-          Settings
+          {t("title")}
         </h1>
         <p className="mt-2 text-sm font-medium text-[#6B6B6B]">
-          Manage your credentials, branding, and integrations.
+          {t("description")}
         </p>
       </div>
 
@@ -652,10 +659,10 @@ export default function SettingsPage() {
         <nav
           className="hidden lg:flex w-52 shrink-0 flex-col gap-1"
           role="tablist"
-          aria-label="Settings navigation"
+          aria-label={t("navAriaLabel")}
           aria-orientation="vertical"
         >
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <button
               key={item.id}
               id={getSettingsTabDomId(item.id, "desktop")}
@@ -689,10 +696,10 @@ export default function SettingsPage() {
         <div
           className="lg:hidden flex gap-1 overflow-x-auto rounded-xl border border-[#E8E8E8] bg-[#F5F5F5] p-1 w-full"
           role="tablist"
-          aria-label="Settings navigation"
+          aria-label={t("navAriaLabel")}
           aria-orientation="horizontal"
         >
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <button
               key={item.id}
               id={getSettingsTabDomId(item.id, "mobile")}
@@ -728,17 +735,17 @@ export default function SettingsPage() {
             <div
               id={getSettingsPanelDomId("api")}
               role="tabpanel"
-              aria-label="API Keys"
+              aria-label={t("navApiKeys")}
               aria-labelledby="api-tab api-tab-mobile"
               tabIndex={0}
               className="rounded-2xl border border-[#E8E8E8] bg-white p-8 flex flex-col gap-8"
             >
               <div>
                 <h2 className="text-lg font-bold text-[#0A0A0A] mb-1">
-                  API Authentication
+                  {t("apiAuthTitle")}
                 </h2>
                 <p className="text-sm text-[#6B6B6B]">
-                  Your secret key for server-side API requests.
+                  {t("apiAuthDescription")}
                 </p>
               </div>
 
@@ -748,7 +755,7 @@ export default function SettingsPage() {
                     htmlFor="live-api-key"
                     className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]"
                   >
-                    Live API Key
+                    {t("liveApiKey")}
                   </label>
                   <button
                     type="button"
@@ -758,7 +765,7 @@ export default function SettingsPage() {
                     aria-describedby="live-api-key-visibility"
                     className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B] hover:text-[#0A0A0A] transition-colors"
                   >
-                    <EyeIcon open={revealed} /> {revealed ? "Hide" : "Reveal"}
+                    <EyeIcon open={revealed} /> {revealed ? t("hide") : t("reveal")}
                   </button>
                 </div>
                 <div className="flex items-center gap-2 rounded-xl border border-[#E8E8E8] bg-[#F9F9F9] p-1 pl-4">
@@ -771,15 +778,16 @@ export default function SettingsPage() {
                   {revealed && <CopyButton text={apiKey} />}
                 </div>
                 <p className="text-xs text-[#6B6B6B]">
-                  Pass as <code className="text-[#0A0A0A]">x-api-key</code>{" "}
-                  header on every request.
+                  {t("apiKeyHeaderHintPrefix")}{" "}
+                  <code className="text-[#0A0A0A]">x-api-key</code>{" "}
+                  {t("apiKeyHeaderHintSuffix")}
                 </p>
                 <p
                   id="live-api-key-visibility"
                   className="sr-only"
                   aria-live="polite"
                 >
-                  {revealed ? "Live API key is currently visible." : "Live API key is currently hidden."}
+                  {revealed ? t("apiKeyVisible") : t("apiKeyHidden")}
                 </p>
               </div>
 
@@ -788,11 +796,10 @@ export default function SettingsPage() {
               <div className="flex flex-col gap-4">
                 <div>
                   <h3 className="text-sm font-bold text-[#0A0A0A] mb-1">
-                    Rotate API Key
+                    {t("rotateApiKeyTitle")}
                   </h3>
                   <p className="text-xs text-[#6B6B6B]">
-                    Generates a new key and immediately invalidates the current
-                    one.
+                    {t("rotateApiKeyDescription")}
                   </p>
                 </div>
                 {rotateError && (
@@ -809,24 +816,25 @@ export default function SettingsPage() {
                     }}
                     className="self-start rounded-xl border border-red-200 bg-red-50 px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-red-600 hover:bg-red-100 transition-all"
                   >
-                    Rotate Key…
+                    {t("rotateKeyEllipsis")}
                   </button>
                 ) : (
                   <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-5 flex flex-col gap-3">
                     <p className="text-xs font-bold text-yellow-800 uppercase tracking-widest">
-                      Confirm Action
+                      {t("confirmAction")}
                     </p>
                     <p className="text-xs text-yellow-700">
-                      The old key will stop working immediately.
+                      {t("rotateKeyWarning")}
                     </p>
                     <div className="flex flex-col gap-3 sm:flex-row">
                       <button
                         type="button"
                         onClick={confirmRotate}
                         disabled={rotating}
-                        className="flex-1 min-w-0 rounded-xl bg-[var(--pluto-500)] py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
+                        className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-xl bg-[var(--pluto-500)] py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
                       >
-                        Confirm
+                        {rotating && <Spinner size="sm" className="h-3.5 w-3.5" />}
+                        {rotating ? t("rotating") : t("confirm")}
                       </button>
                       <button
                         type="button"
@@ -834,7 +842,7 @@ export default function SettingsPage() {
                         disabled={rotating}
                         className="flex-1 min-w-0 rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-xs font-bold uppercase tracking-widest text-[#6B6B6B] hover:bg-[#F5F5F5] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
                       >
-                        Cancel
+                        {t("cancel")}
                       </button>
                     </div>
                   </div>
@@ -844,28 +852,40 @@ export default function SettingsPage() {
           )}
 
           {/* Branding Tab */}
-          {activeTab === "branding" && (
+          {activeTab === "branding" && loadingBranding && (
             <div
               id={getSettingsPanelDomId("branding")}
               role="tabpanel"
-              aria-label="Branding"
+              aria-label={t("navBranding")}
+              aria-labelledby="branding-tab branding-tab-mobile"
+              aria-busy="true"
+              tabIndex={0}
+            >
+              <SettingsPanelSkeleton />
+            </div>
+          )}
+          {activeTab === "branding" && !loadingBranding && (
+            <div
+              id={getSettingsPanelDomId("branding")}
+              role="tabpanel"
+              aria-label={t("navBranding")}
               aria-labelledby="branding-tab branding-tab-mobile"
               tabIndex={0}
               className="rounded-2xl border border-[#E8E8E8] bg-white p-8 flex flex-col gap-8"
             >
               <div>
                 <h2 className="text-lg font-bold text-[#0A0A0A] mb-1">
-                  Checkout Branding
+                  {t("checkoutBrandingTitle")}
                 </h2>
                 <p className="text-sm text-[#6B6B6B]">
-                  Customize the look of your payment checkout page.
+                  {t("checkoutBrandingDescription")}
                 </p>
               </div>
 
               {/* Logo upload */}
               <div className="flex flex-col gap-3">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-                  Store Logo
+                  {t("storeLogo")}
                 </label>
                 <div
                   {...getRootProps()}
@@ -883,7 +903,7 @@ export default function SettingsPage() {
                         unoptimized
                       />
                       <span className="text-xs text-[#6B6B6B]">
-                        Click or drag to replace
+                        {t("clickOrDragToReplace")}
                       </span>
                     </div>
                   ) : (
@@ -904,10 +924,10 @@ export default function SettingsPage() {
                         </svg>
                       </div>
                       <p className="text-sm font-medium text-[#0A0A0A]">
-                        {isDragActive ? "Drop here" : "Upload logo"}
+                        {isDragActive ? t("dropHere") : t("uploadLogo")}
                       </p>
                       <p className="text-xs text-[#6B6B6B]">
-                        PNG, JPG or SVG · max 2MB
+                        {t("logoFormats")}
                       </p>
                     </div>
                   )}
@@ -918,7 +938,7 @@ export default function SettingsPage() {
                     onClick={() => updateBrandingField("logo_url", null)}
                     className="self-start text-xs text-red-500 hover:text-red-600 transition-colors"
                   >
-                    Remove logo
+                    {t("removeLogo")}
                   </button>
                 )}
               </div>
@@ -926,13 +946,13 @@ export default function SettingsPage() {
               {/* Color pickers */}
               <div className="flex flex-col gap-4">
                 <label className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-                  Colors
+                  {t("colors")}
                 </label>
                 {(
                   [
-                    ["primary_color", "Primary"],
-                    ["secondary_color", "Secondary"],
-                    ["background_color", "Background"],
+                    ["primary_color", t("primary")],
+                    ["secondary_color", t("secondary")],
+                    ["background_color", t("background")],
                   ] as const
                 ).map(([field, label]) => (
                   <div key={field} className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -970,7 +990,7 @@ export default function SettingsPage() {
               <div className="rounded-xl border border-[#E8E8E8] overflow-hidden">
                 <div className="px-4 py-2.5 border-b border-[#E8E8E8] bg-[#F9F9F9]">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-                    Preview
+                    {t("preview")}
                   </p>
                 </div>
                 <div
@@ -985,7 +1005,7 @@ export default function SettingsPage() {
                       className="text-sm font-medium mb-3"
                       style={{ color: branding.secondary_color }}
                     >
-                      Sample checkout
+                      {t("sampleCheckout")}
                     </p>
                     <button
                       type="button"
@@ -998,7 +1018,7 @@ export default function SettingsPage() {
                             : "#fff",
                       }}
                     >
-                      Pay Now
+                      {t("payNow")}
                     </button>
                   </div>
                 </div>
@@ -1014,7 +1034,7 @@ export default function SettingsPage() {
                   role="alert"
                   className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-700"
                 >
-                  Colors may not meet WCAG contrast targets. Consider adjusting.
+                  {t("lowContrastWarning")}
                 </div>
               )}
 
@@ -1022,10 +1042,11 @@ export default function SettingsPage() {
                 <button
                   type="button"
                   onClick={saveBranding}
-                  disabled={loadingBranding || savingBranding}
-                  className="flex-1 min-w-0 rounded-xl bg-[var(--pluto-500)] py-3 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
+                  disabled={savingBranding}
+                  className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-xl bg-[var(--pluto-500)] py-3 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
                 >
-                  {savingBranding ? "Saving…" : "Save Branding"}
+                  {savingBranding && <Spinner size="sm" className="h-3.5 w-3.5" />}
+                  {savingBranding ? t("saving") : t("saveBranding")}
                 </button>
                 <button
                   type="button"
@@ -1033,7 +1054,7 @@ export default function SettingsPage() {
                   disabled={!apiKey}
                   className="flex-1 min-w-0 rounded-xl border border-[#E8E8E8] bg-white px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B] hover:bg-[#F5F5F5] hover:text-[#0A0A0A] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
                 >
-                  Preview Receipt
+                  {t("previewReceipt")}
                 </button>
               </div>
             </div>
@@ -1044,17 +1065,17 @@ export default function SettingsPage() {
             <div
               id={getSettingsPanelDomId("display")}
               role="tabpanel"
-              aria-label="Display"
+              aria-label={t("navDisplay")}
               aria-labelledby="display-tab display-tab-mobile"
               tabIndex={0}
               className="rounded-2xl border border-[#E8E8E8] bg-white p-8 flex flex-col gap-8 max-w-full"
             >
               <div>
                 <h2 className="text-lg font-bold text-[#0A0A0A] mb-1">
-                  Display Preferences
+                  {t("displayPreferencesTitle")}
                 </h2>
                 <p className="text-sm text-[#6B6B6B]">
-                  Adjust how values appear across the dashboard.
+                  {t("displayPreferencesDescription")}
                 </p>
               </div>
               <div className="rounded-xl border border-[#E8E8E8] bg-[#F9F9F9] p-5">
@@ -1067,10 +1088,10 @@ export default function SettingsPage() {
                   />
                   <div>
                     <p className="text-sm font-bold text-[#0A0A0A]">
-                      Hide trailing cents
+                      {t("hideTrailingCents")}
                     </p>
                     <p className="text-xs text-[#6B6B6B] mt-1">
-                      Whole amounts like 50 will display without the .00 suffix.
+                      {t("hideTrailingCentsDescription")}
                     </p>
                   </div>
                 </label>
@@ -1079,11 +1100,23 @@ export default function SettingsPage() {
           )}
 
           {/* Webhooks Tab */}
-          {activeTab === "webhooks" && (
+          {activeTab === "webhooks" && loadingWebhook && (
             <div
               id={getSettingsPanelDomId("webhooks")}
               role="tabpanel"
-              aria-label="Webhooks"
+              aria-label={t("navWebhooks")}
+              aria-labelledby="webhooks-tab webhooks-tab-mobile"
+              aria-busy="true"
+              tabIndex={0}
+            >
+              <SettingsPanelSkeleton />
+            </div>
+          )}
+          {activeTab === "webhooks" && !loadingWebhook && (
+            <div
+              id={getSettingsPanelDomId("webhooks")}
+              role="tabpanel"
+              aria-label={t("navWebhooks")}
               aria-labelledby="webhooks-tab webhooks-tab-mobile"
               tabIndex={0}
               className="rounded-2xl border border-[#E8E8E8] bg-white p-8 flex flex-col gap-8 max-w-full"
@@ -1091,10 +1124,10 @@ export default function SettingsPage() {
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
                   <h2 className="text-lg font-bold text-[#0A0A0A] mb-1">
-                    Webhook Endpoint
+                    {t("webhookEndpointTitle")}
                   </h2>
                   <p className="text-sm text-[#6B6B6B]">
-                    Receive real-time payment events at your server.
+                    {t("webhookEndpointDescription")}
                   </p>
                 </div>
                 {webhookUrl && (
@@ -1105,7 +1138,7 @@ export default function SettingsPage() {
                       aria-live="polite"
                       className={`rounded-full border px-3 py-1 text-[9px] font-bold uppercase tracking-widest ${isVerified ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-yellow-200 bg-yellow-50 text-yellow-700"}`}
                     >
-                      {isVerified ? "Verified" : "Unverified"}
+                      {isVerified ? t("verified") : t("unverified")}
                     </span>
                   </div>
                 )}
@@ -1122,7 +1155,7 @@ export default function SettingsPage() {
                   htmlFor="webhook-url"
                   className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]"
                 >
-                  Endpoint URL
+                  {t("endpointUrl")}
                 </label>
                 <input
                   id="webhook-url"
@@ -1144,19 +1177,21 @@ export default function SettingsPage() {
                     type="button"
                     onClick={saveWebhookUrl}
                     disabled={
-                      savingWebhook || loadingWebhook || !!webhookUrlError
+                      savingWebhook || !!webhookUrlError
                     }
-                    className="flex-1 min-w-0 rounded-xl bg-[var(--pluto-500)] py-2.5 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
+                    className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-xl bg-[var(--pluto-500)] py-2.5 text-[10px] font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
                   >
-                    {savingWebhook ? "Saving…" : "Save URL"}
+                    {savingWebhook && <Spinner size="sm" className="h-3.5 w-3.5" />}
+                    {savingWebhook ? t("saving") : t("saveUrl")}
                   </button>
                   <button
                     type="button"
                     onClick={testWebhook}
                     disabled={testingWebhook || !webhookUrl}
-                    className="flex-1 min-w-0 rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B] hover:bg-[#F5F5F5] hover:text-[#0A0A0A] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
+                    className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B] hover:bg-[#F5F5F5] hover:text-[#0A0A0A] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
                   >
-                    {testingWebhook ? "Testing…" : "Send Test"}
+                    {testingWebhook && <Spinner size="sm" className="h-3.5 w-3.5" />}
+                    {testingWebhook ? t("testing") : t("sendTest")}
                   </button>
                 </div>
               </div>
@@ -1164,10 +1199,10 @@ export default function SettingsPage() {
               {webhookUrl && webhookVerification && (
                 <div className="rounded-xl border border-[#E8E8E8] bg-[#F9F9F9] p-5 flex flex-col gap-3">
                   <p className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-                    Domain Verification
+                    {t("domainVerification")}
                   </p>
                   <p className="text-xs text-[#6B6B6B]">
-                    Host this token at{" "}
+                    {t("hostTokenAt")}{" "}
                     <code className="text-[#0A0A0A] break-all">
                       {webhookVerification.verification_file_url}
                     </code>
@@ -1186,9 +1221,10 @@ export default function SettingsPage() {
                     type="button"
                     onClick={verifyWebhookDomain}
                     disabled={verifyingWebhookDomain}
-                    className="rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-[10px] font-bold uppercase tracking-widest text-[#0A0A0A] hover:bg-[#F5F5F5] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
+                    className="flex items-center justify-center gap-2 rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-[10px] font-bold uppercase tracking-widest text-[#0A0A0A] hover:bg-[#F5F5F5] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
                   >
-                    {verifyingWebhookDomain ? "Verifying…" : "Verify Domain"}
+                    {verifyingWebhookDomain && <Spinner size="sm" className="h-3.5 w-3.5" />}
+                    {verifyingWebhookDomain ? t("verifying") : t("verifyDomain")}
                   </button>
                 </div>
               )}
@@ -1198,12 +1234,12 @@ export default function SettingsPage() {
               <div className="flex flex-col gap-4">
                 <div>
                   <h3 className="text-sm font-bold text-[#0A0A0A] mb-1">
-                    Signing Secret
+                    {t("signingSecretTitle")}
                   </h3>
                   <p className="text-xs text-[#6B6B6B]">
-                    Validate the{" "}
+                    {t("signingSecretDescriptionPrefix")}{" "}
                     <code className="text-[#0A0A0A]">Pluto-Signature</code>{" "}
-                    header on incoming webhooks.
+                    {t("signingSecretDescriptionSuffix")}
                   </p>
                 </div>
                 <div className="flex items-center gap-2 rounded-xl border border-[#E8E8E8] bg-[#F9F9F9] p-1 pl-4">
@@ -1221,7 +1257,7 @@ export default function SettingsPage() {
                     <button
                       type="button"
                       onClick={() => setWebhookRevealedSecret((v) => !v)}
-                      aria-label={webhookRevealedSecret ? "Hide webhook secret" : "Show webhook secret"}
+                      aria-label={webhookRevealedSecret ? t("hideWebhookSecret") : t("showWebhookSecret")}
                       aria-pressed={webhookRevealedSecret}
                       aria-controls="webhook-secret-value webhook-secret-visibility"
                       className="p-1 text-[#6B6B6B] hover:text-[#0A0A0A]"
@@ -1241,8 +1277,8 @@ export default function SettingsPage() {
                     className="rounded-xl border border-yellow-200 bg-yellow-50 p-3 text-center text-[10px] font-bold uppercase tracking-widest text-yellow-800"
                   >
                     {webhookRevealedSecret
-                      ? "Webhook secret is visible. Copy now — shown once."
-                      : "Webhook secret is hidden. Toggle reveal to inspect it."}
+                      ? t("webhookSecretVisible")
+                      : t("webhookSecretHidden")}
                   </div>
                 )}
                 {!confirmRegenSecret ? (
@@ -1254,24 +1290,25 @@ export default function SettingsPage() {
                     }}
                     className="self-start rounded-xl border border-red-200 bg-red-50 px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-red-600 hover:bg-red-100 transition-all"
                   >
-                    Regenerate Secret…
+                    {t("regenerateSecretEllipsis")}
                   </button>
                 ) : (
                   <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-5 flex flex-col gap-3">
                     <p className="text-xs font-bold text-yellow-800 uppercase tracking-widest">
-                      Confirm Action
+                      {t("confirmAction")}
                     </p>
                     <p className="text-xs text-yellow-700">
-                      The current secret will stop working immediately.
+                      {t("regenerateSecretWarning")}
                     </p>
                     <div className="flex flex-col gap-3 sm:flex-row">
                       <button
                         type="button"
                         onClick={regenerateWebhookSecret}
                         disabled={regeneratingSecret}
-                        className="flex-1 min-w-0 rounded-xl bg-[var(--pluto-500)] py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
+                        className="flex-1 min-w-0 flex items-center justify-center gap-2 rounded-xl bg-[var(--pluto-500)] py-2.5 text-xs font-bold uppercase tracking-widest text-white hover:bg-[var(--pluto-600)] hover:shadow-md hover:scale-[1.01] disabled:opacity-50 transition-all duration-200"
                       >
-                        Confirm
+                        {regeneratingSecret && <Spinner size="sm" className="h-3.5 w-3.5" />}
+                        {regeneratingSecret ? t("regenerating") : t("confirm")}
                       </button>
                       <button
                         type="button"
@@ -1279,7 +1316,7 @@ export default function SettingsPage() {
                         disabled={regeneratingSecret}
                         className="flex-1 min-w-0 rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-xs font-bold uppercase tracking-widest text-[#6B6B6B] hover:bg-[#F5F5F5] hover:shadow-sm hover:border-[#D0D0D0] disabled:opacity-50 transition-all duration-200"
                       >
-                        Cancel
+                        {t("cancel")}
                       </button>
                     </div>
                   </div>
@@ -1298,17 +1335,17 @@ export default function SettingsPage() {
             <div
               id={getSettingsPanelDomId("danger")}
               role="tabpanel"
-              aria-label="Danger Zone"
+              aria-label={t("navDanger")}
               aria-labelledby="danger-tab danger-tab-mobile"
               tabIndex={0}
               className="rounded-2xl border border-red-200 bg-white p-8 flex flex-col gap-6 max-w-full"
             >
               <div>
                 <h2 className="text-lg font-bold text-red-600 mb-1">
-                  Danger Zone
+                  {t("navDanger")}
                 </h2>
                 <p className="text-sm text-[#6B6B6B]">
-                  Irreversible actions. Proceed with caution.
+                  {t("dangerZoneDescription")}
                 </p>
               </div>
               <DangerZone apiKey={apiKey} />

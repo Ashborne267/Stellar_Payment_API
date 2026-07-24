@@ -2,6 +2,7 @@
 
 import { Avatar } from "@/components/ui/Avatar";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import {
   useMerchantMetadata,
   useMerchantLogout,
@@ -11,6 +12,7 @@ import {
 import { useState } from "react";
 
 export default function MerchantProfileCard() {
+  const t = useTranslations("profileCard");
   const merchant = useMerchantMetadata();
   const logout = useMerchantLogout();
   const hydrated = useMerchantHydrated();
@@ -18,7 +20,15 @@ export default function MerchantProfileCard() {
 
   useHydrateMerchantStore();
 
-  if (!hydrated) return null;
+  if (!hydrated) {
+    return (
+      <div
+        className="h-10 w-10 shrink-0 animate-pulse rounded-full border border-[#E8E8E8] bg-[#F0F0F0] sm:w-40"
+        role="status"
+        aria-label={t("loadingProfile")}
+      />
+    );
+  }
 
   if (!merchant) {
     return (
@@ -29,7 +39,7 @@ export default function MerchantProfileCard() {
         <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A9 9 0 1118.879 17.804M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
-        Account
+        {t("account")}
       </Link>
     );
   }
@@ -51,7 +61,7 @@ export default function MerchantProfileCard() {
         type="button"
         onClick={() => setShowDropdown((v) => !v)}
         className="group flex h-10 items-center gap-2.5 rounded-full border border-[#E8E8E8] bg-white px-2.5 pr-3.5 transition-all hover:border-[#DADADA] hover:bg-[#F8F8F8]"
-        aria-label="Open profile menu"
+        aria-label={t("openProfileMenu")}
         aria-expanded={showDropdown}
         aria-haspopup="true"
       >
@@ -134,7 +144,7 @@ export default function MerchantProfileCard() {
                     d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
                   />
                 </svg>
-                Dashboard
+                {t("dashboard")}
               </Link>
 
               <Link
@@ -163,7 +173,7 @@ export default function MerchantProfileCard() {
                     d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
                   />
                 </svg>
-                Settings
+                {t("settings")}
               </Link>
 
               <Link
@@ -186,7 +196,7 @@ export default function MerchantProfileCard() {
                     d="M12 4v16m8-8H4"
                   />
                 </svg>
-                Create Payment
+                {t("createPayment")}
               </Link>
 
               <button
@@ -208,7 +218,7 @@ export default function MerchantProfileCard() {
                     d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
                   />
                 </svg>
-                Logout Account
+                {t("logoutAccount")}
               </button>
             </div>
           </div>
