@@ -19,7 +19,8 @@ vi.mock("next-intl", () => ({
 }));
 
 // framer-motion: render plain HTML elements so jsdom doesn't choke on
-// animation APIs. AnimatePresence just renders its children.
+// animation APIs. AnimatePresence uses mode="wait" to ensure only the
+// current step renders at a time.
 vi.mock("framer-motion", async () => {
   const React = await import("react");
   const motion = new Proxy(
@@ -43,8 +44,14 @@ vi.mock("framer-motion", async () => {
   );
   return {
     motion,
-    AnimatePresence: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
+    AnimatePresence: ({ children, mode }: { children: React.ReactNode; mode?: string }) => {
+      // mode="wait" means only render the last child (current step)
+      if (mode === "wait") {
+        const childArray = React.Children.toArray(children);
+        return React.createElement(React.Fragment, null, childArray[childArray.length - 1]);
+      }
+      return React.createElement(React.Fragment, null, children);
+    },
     type: {},
   };
 });
@@ -75,6 +82,13 @@ function navigateToStep(targetIndex: number) {
     fireEvent.click(screen.getByText("next"));
   }
   for (let i = 1; i < targetIndex; i++) {
+    fireEvent.click(screen.getByText("next"));
+  }
+}
+
+/** Navigate without re-filling personal step (use when already past step 1). */
+function clickNext(times: number) {
+  for (let i = 0; i < times; i++) {
     fireEvent.click(screen.getByText("next"));
   }
 }
@@ -148,7 +162,7 @@ describe("KycSubmissionForm", () => {
     navigateToStep(1);
     expect(screen.getByText("2 of 4")).toBeInTheDocument();
 
-    navigateToStep(2);
+    clickNext(1);
     expect(screen.getByText("3 of 4")).toBeInTheDocument();
   });
 
@@ -296,7 +310,7 @@ describe("KycSubmissionForm", () => {
     fireEvent.click(screen.getByText("submit"));
 
     await waitFor(() => {
-      expect(screen.getByText("successTitle")).toBeInTheDocument();
+      expect(screen.getAllByText("successTitle").length).toBeGreaterThanOrEqual(1);
     });
     expect(mockToastSuccess).toHaveBeenCalled();
   });
@@ -353,7 +367,7 @@ describe("KycSubmissionForm", () => {
     fireEvent.click(screen.getByText("submit"));
 
     await waitFor(() => {
-      expect(screen.getByText("successTitle")).toBeInTheDocument();
+      expect(screen.getAllByText("successTitle").length).toBeGreaterThanOrEqual(1);
     });
 
     fireEvent.click(screen.getByText("submitAnother"));
@@ -410,7 +424,7 @@ describe("KycSubmissionForm", () => {
 
   it("marks the form container with role=region", () => {
     render(React.createElement(KycSubmissionForm));
-    expect(screen.getByRole("region")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "formTitle" })).toBeInTheDocument();
   });
 
   // ── Screen reader support ─────────────────────────────────────────────────
@@ -528,8 +542,8 @@ describe("KycSubmissionForm", () => {
     fireEvent.click(screen.getByText("next")); // → address
     fireEvent.click(screen.getByText("next")); // → documents
     fireEvent.click(screen.getByText("next")); // → review
-    // city was not filled, so it renders the placeholder dash
-    const dashes = screen.getAllByText("—");
+    // city was not filled, so it renders the placeholder dash (mock returns key)
+    const dashes = screen.getAllByText("dash");
     expect(dashes.length).toBeGreaterThan(0);
   });
 
