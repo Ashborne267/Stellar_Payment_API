@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, Suspense, lazy } from "react";
+import { useTranslations } from "next-intl";
 import { useWallet } from "@/lib/wallet-context";
 import { getAccountBalances, type AssetBalance } from "@/lib/stellar";
 import { Spinner } from "./ui/Spinner";
@@ -19,8 +20,10 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const HORIZON_URL = process.env.NEXT_PUBLIC_HORIZON_URL ?? "https://horizon-testnet.stellar.org";
 
 export function SupportPanel() {
+  const t = useTranslations("support");
   const { activeProvider } = useWallet();
   const [visitorAddress, setVisitorAddress] = useState<string | null>(null);
+  const [isLoadingWallet, setIsLoadingWallet] = useState(false);
   const [amount, setAmount] = useState("");
   const [assetCode, setAssetCode] = useState("XLM");
   const [message, setMessage] = useState("");
@@ -31,7 +34,12 @@ export function SupportPanel() {
   // Fetch visitor address on mount/provider change
   useEffect(() => {
     if (activeProvider) {
-      activeProvider.getPublicKey().then(setVisitorAddress).catch(console.error);
+      setIsLoadingWallet(true);
+      activeProvider
+        .getPublicKey()
+        .then(setVisitorAddress)
+        .catch(console.error)
+        .finally(() => setIsLoadingWallet(false));
     } else {
       setVisitorAddress(null);
     }
@@ -51,10 +59,10 @@ export function SupportPanel() {
   const balanceAnnouncement = !visitorAddress
     ? ""
     : loadingBalance
-      ? "Syncing wallet balance…"
+      ? t("balanceSyncing")
       : isUnfunded
-        ? "Wallet is unfunded."
-        : `Balance synced: ${selectedBalance} ${assetCode}.`;
+        ? t("walletUnfunded")
+        : t("balanceSynced", { balance: selectedBalance, asset: assetCode });
 
   const handleAmountChange = (val: string) => {
     setAmount(val);
@@ -66,8 +74,8 @@ export function SupportPanel() {
     }
   };
 
-  const amountError = parseFloat(amount) > parseFloat(selectedBalance) 
-    ? "Insufficient balance" 
+  const amountError = parseFloat(amount) > parseFloat(selectedBalance)
+    ? t("insufficientBalance")
     : null;
 
   const canSubmit = visitorAddress && amount && !amountError && !isSubmitting && !isUnfunded;
@@ -92,7 +100,7 @@ export function SupportPanel() {
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to record support transaction");
+      if (!res.ok) throw new Error(t("failedToRecord"));
 
       // Mock success tx hash for modal
       const mockHash = Array.from({length: 64}, () => Math.floor(Math.random() * 16).toString(16)).join("");
@@ -103,7 +111,7 @@ export function SupportPanel() {
       setAmount("");
       setMessage("");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Submission failed");
+      toast.error(err instanceof Error ? err.message : t("submissionFailed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -119,18 +127,23 @@ export function SupportPanel() {
       <div className="space-y-4">
         {/* Wallet Info */}
         <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider">
-          <span className="text-slate-500">Your Wallet</span>
-          {visitorAddress ? (
+          <span className="text-slate-500">{t("yourWallet")}</span>
+          {isLoadingWallet ? (
+            <span
+              className="h-3 w-24 animate-pulse rounded bg-white/10"
+              aria-label={t("connectingWallet")}
+            />
+          ) : visitorAddress ? (
             <span className="text-mint truncate max-w-[120px]">{visitorAddress}</span>
           ) : (
-            <span className="text-red-400">Not Connected</span>
+            <span className="text-red-400">{t("notConnected")}</span>
           )}
         </div>
 
         {/* Amount Input */}
         <div className="space-y-1.5">
           <div className="flex justify-between items-end">
-            <label className="text-xs font-semibold text-white" htmlFor="amount-input">Amount</label>
+            <label className="text-xs font-semibold text-white" htmlFor="amount-input">{t("amount")}</label>
             <div className="text-[10px] text-slate-400" aria-live="polite" aria-atomic="true">
               <AnimatePresence mode="wait" initial={false}>
                 {loadingBalance ? (
@@ -142,7 +155,7 @@ export function SupportPanel() {
                     transition={{ duration: 0.18 }}
                     className="flex items-center gap-2"
                   >
-                    <span className="sr-only">Loading balance...</span>
+                    <span className="sr-only">{t("loadingBalance")}</span>
                     <Spinner size="xs" aria-hidden="true" />
                   </motion.div>
                 ) : isUnfunded ? (
@@ -157,7 +170,7 @@ export function SupportPanel() {
                     rel="noopener noreferrer"
                     className="inline-block text-yellow-400 hover:underline"
                   >
-                    Unfunded (Fund on Testnet)
+                    {t("unfunded")}
                   </motion.a>
                 ) : (
                   // Keying by value animates the figure each time polling syncs a new balance.
@@ -168,9 +181,9 @@ export function SupportPanel() {
                     exit={{ opacity: 0, y: 4 }}
                     transition={{ duration: 0.18 }}
                     className="inline-block"
-                    aria-label={`Available balance: ${selectedBalance} ${assetCode}`}
+                    aria-label={t("availableAriaLabel", { balance: selectedBalance, asset: assetCode })}
                   >
-                    Available: {selectedBalance} {assetCode}
+                    {t("available", { balance: selectedBalance, asset: assetCode })}
                   </motion.span>
                 )}
               </AnimatePresence>
@@ -178,21 +191,21 @@ export function SupportPanel() {
             <div className="text-[10px] text-slate-400">
               {loadingBalance ? (
                 <div className="flex items-center gap-2">
-                  <span className="sr-only">Loading balance...</span>
+                  <span className="sr-only">{t("loadingBalance")}</span>
                   <Spinner size="xs" aria-hidden="true" />
                 </div>
               ) : isUnfunded ? (
-                <a 
-                  href="https://laboratory.stellar.org/#account-creator?network=testnet" 
-                  target="_blank" 
+                <a
+                  href="https://laboratory.stellar.org/#account-creator?network=testnet"
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="text-yellow-400 hover:underline"
                 >
-                  Unfunded (Fund on Testnet)
+                  {t("unfunded")}
                 </a>
               ) : (
-                <span aria-label={`Available balance: ${selectedBalance} ${assetCode}`}>
-                  Available: {selectedBalance} {assetCode}
+                <span aria-label={t("availableAriaLabel", { balance: selectedBalance, asset: assetCode })}>
+                  {t("available", { balance: selectedBalance, asset: assetCode })}
                 </span>
               )}
             </div>
@@ -218,14 +231,14 @@ export function SupportPanel() {
 
         {/* Message Input */}
         <div className="space-y-1.5">
-          <label className="text-xs font-semibold text-white">Leave a message (optional)</label>
+          <label className="text-xs font-semibold text-white">{t("messageLabel")}</label>
           <div className="relative">
             <textarea
               value={message}
               onChange={(e) => handleMessageChange(e.target.value)}
               rows={2}
               className="w-full rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white placeholder:text-slate-600 focus:border-mint/50 focus:outline-none focus:ring-1 focus:ring-mint/50 resize-none"
-              placeholder="Thanks for the great work!"
+              placeholder={t("messagePlaceholder")}
             />
             <div className={`absolute bottom-2 right-3 text-[9px] font-mono ${message.length === 28 ? 'text-red-400' : 'text-slate-500'}`}>
               {message.length} / 28
@@ -236,9 +249,17 @@ export function SupportPanel() {
         <button
           disabled={!canSubmit}
           onClick={handleSubmit}
+          aria-busy={isSubmitting}
           className="w-full rounded-xl bg-mint py-3.5 text-sm font-bold text-black transition-all hover:scale-[1.01] active:translate-y-px disabled:opacity-40 disabled:grayscale disabled:hover:scale-100"
         >
-          {isSubmitting ? <Spinner size="sm" /> : "Send Support"}
+          {isSubmitting ? (
+            <span className="flex items-center justify-center gap-2">
+              <Spinner size="sm" aria-hidden="true" />
+              {t("sending")}
+            </span>
+          ) : (
+            t("sendSupport")
+          )}
         </button>
       </div>
 
