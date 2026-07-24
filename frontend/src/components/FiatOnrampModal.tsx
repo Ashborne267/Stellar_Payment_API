@@ -5,15 +5,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useTranslations } from "next-intl";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import {
-  getAnchorServices,
-  authenticateWithAnchor,
-  initiateDeposit,
-} from "@/lib/stellar";
-import { signWithFreighter, getFreighterPublicKey } from "@/lib/freighter";
 import { toast } from "sonner";
 import { Modal } from "@/components/ui/Modal";
 import { Spinner } from "@/components/ui/Spinner";
+import { useSep24AnchorFlow, type Sep24BusyStep } from "@/hooks/useSep24AnchorFlow";
 
 interface FiatOnrampModalProps {
   isOpen: boolean;
@@ -33,33 +28,28 @@ const SUPPORTED_ASSETS = [
   }, // Testnet SRT (Stellar Resource Token)
 ];
 
-type Step = "SELECT" | "CONNECTING" | "AUTH" | "GENERATING" | "INTERACTIVE";
-type BusyStep = Exclude<Step, "SELECT" | "INTERACTIVE">;
-
-const STEP_MESSAGE_KEY: Record<BusyStep, "stepConnecting" | "stepAuth" | "stepGenerating"> = {
+const STEP_MESSAGE_KEY: Record<Sep24BusyStep, "stepConnecting" | "stepAuth" | "stepGenerating"> = {
   CONNECTING: "stepConnecting",
   AUTH: "stepAuth",
-  GENERATING: "stepGenerating",
+  SUBMITTING: "stepGenerating",
 };
 
 export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProps) {
   const t = useTranslations("fiatOnramp");
-  const [step, setStep] = useState<Step>("SELECT");
+  const { step, isBusy, interactiveUrl, start, reset: resetFlow } = useSep24AnchorFlow({
+    networkPassphrase: NETWORK_PASSPHRASE,
+  });
   const [amount, setAmount] = useState("");
   const [anchorDomain, setAnchorDomain] = useState(DEFAULT_ANCHOR);
   const [selectedAsset, setSelectedAsset] = useState(SUPPORTED_ASSETS[0]);
-  const [interactiveUrl, setInteractiveUrl] = useState<string | null>(null);
   const [iframeLoading, setIframeLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const isBusy = step === "CONNECTING" || step === "AUTH" || step === "GENERATING";
-
   const reset = useCallback(() => {
-    setStep("SELECT");
-    setInteractiveUrl(null);
+    resetFlow();
     setIframeLoading(true);
     setError(null);
-  }, []);
+  }, [resetFlow]);
 
   const handleClose = useCallback(() => {
     reset();
@@ -69,47 +59,23 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
   const handleStartDeposit = useCallback(async () => {
     setError(null);
     try {
-      setStep("CONNECTING");
-      const publicKey = await getFreighterPublicKey();
-      const services = await getAnchorServices(anchorDomain);
-
-      if (!services.webAuthEndpoint || !services.transferServer) {
-        throw new Error("Anchor does not support SEP-0024 or SEP-0010");
-      }
-
-      setStep("AUTH");
-      const jwt = await authenticateWithAnchor(
-        publicKey,
-        services.webAuthEndpoint,
-        async (xdr) => {
-          const res = await signWithFreighter(xdr, NETWORK_PASSPHRASE);
-          return res.signedXDR;
-        },
-      );
-
-      setStep("GENERATING");
-      const url = await initiateDeposit(
-        services.transferServer,
-        jwt,
-        selectedAsset.code,
-        publicKey,
-        amount || undefined,
-      );
-
-      setInteractiveUrl(url);
-      setStep("INTERACTIVE");
+      await start({
+        anchorDomain,
+        assetCode: selectedAsset.code,
+        direction: "deposit",
+        amount: amount || undefined,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : t("genericError");
       toast.error(message);
       setError(message);
-      setStep("SELECT");
     }
-  }, [anchorDomain, amount, selectedAsset, t]);
+  }, [start, anchorDomain, amount, selectedAsset, t]);
 
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title={t("title")}>
       <AnimatePresence mode="wait">
-        {step === "SELECT" && (
+        {step === "IDLE" && (
           <motion.div
             key="select"
             initial={{ opacity: 0, y: 8 }}
@@ -196,7 +162,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
               {isBusy ? (
                 <>
                   <Spinner size="sm" className="text-black" />
-                  {t(STEP_MESSAGE_KEY[step as BusyStep])}
+                  {t(STEP_MESSAGE_KEY[step as Sep24BusyStep])}
                 </>
               ) : (
                 t("continueButton")
@@ -205,7 +171,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
           </motion.div>
         )}
 
-        {(step === "CONNECTING" || step === "AUTH" || step === "GENERATING") && (
+        {(step === "CONNECTING" || step === "AUTH" || step === "SUBMITTING") && (
           <motion.div
             key="busy"
             initial={{ opacity: 0 }}
@@ -222,14 +188,14 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
                 <Spinner size="lg" className="text-mint" />
               </div>
             </div>
-            <h3 className="text-lg font-bold text-white">{t(STEP_MESSAGE_KEY[step as BusyStep])}</h3>
+            <h3 className="text-lg font-bold text-white">{t(STEP_MESSAGE_KEY[step as Sep24BusyStep])}</h3>
             <p className="mt-2 text-sm text-slate-400">
               {step === "AUTH" ? t("authHint", { domain: anchorDomain }) : t("genericHint")}
             </p>
           </motion.div>
         )}
 
-        {step === "INTERACTIVE" && interactiveUrl && (
+        {step === "READY" && interactiveUrl && (
           <motion.div
             key="interactive"
             initial={{ opacity: 0 }}
@@ -255,7 +221,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
         )}
       </AnimatePresence>
 
-      {step !== "INTERACTIVE" && (
+      {step !== "READY" && (
         <p className="mt-6 text-center text-xs text-slate-500">{t("footerNote")}</p>
       )}
     </Modal>
