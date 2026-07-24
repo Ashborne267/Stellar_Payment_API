@@ -416,5 +416,17 @@
     "regenerateSecretWarning": "The current secret will stop working immediately.",
     "regenerating": "Regenerating…",
     "dangerZoneDescription": "Irreversible actions. Proceed with caution."
+  },
+  "notificationCenter": {
+    "buttonLabel": "Notifications",
+    "buttonLabelWithCount": "Notifications ({count} unread)",
+    "panelLabel": "Notification Center",
+    "heading": "Notifications",
+    "unreadCount": "{count} unread",
+    "noAlerts": "No new alerts",
+    "alertLabel": "Alert",
+    "dismissLabel": "Dismiss notification: {message}",
+    "notificationLabel": "Notification: {message}",
+    "timestampLabel": "Timestamp: {timestamp}"
   }
 }

@@ -4,7 +4,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import SettingsPage from "./page";
+// Import the client widget directly so the test bypasses the RSC wrapper (#1190)
+import SettingsPage from "./SettingsWidget";
 import * as merchantStore from "@/lib/merchant-store";
 import * as displayPreferences from "@/lib/display-preferences";
 
