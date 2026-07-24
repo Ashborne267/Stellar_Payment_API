@@ -187,6 +187,7 @@ export function SupportPanel() {
                   </motion.span>
                 )}
               </AnimatePresence>
+            </div>
             {/* Visual-only — announcements are handled by the live region above. */}
             <div className="text-[10px] text-slate-400">
               {loadingBalance ? (

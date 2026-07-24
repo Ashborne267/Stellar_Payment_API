@@ -297,11 +297,7 @@ export function MultisigProvider({ children, networkPassphrase }: MultisigProvid
         status: 'approved' as MultisigApprovalStatus,
         submittedTxHash: realTxHash,
       });
-
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      const txHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      dispatch({ type: "SUBMIT_SUCCESS", txHash });
+      dispatch({ type: "SUBMIT_SUCCESS", txHash: realTxHash });
     } catch (err) {
       // Revert optimistic update
       setTransactionSafe(previousTransaction);

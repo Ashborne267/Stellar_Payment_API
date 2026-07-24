@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useReducer } from "react";
-import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
+import React, { useCallback, useEffect, useRef, useReducer, useState } from "react";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import confetti from "canvas-confetti";
 import { useTranslations } from "next-intl";
 
@@ -88,6 +88,23 @@ const initialState: AnimationState = {
   announcementText: "",
 };
 
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+
+    updatePreference();
+    mediaQuery.addEventListener("change", updatePreference);
+    return () => mediaQuery.removeEventListener("change", updatePreference);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
 function animationReducer(state: AnimationState, action: AnimationAction): AnimationState {
   switch (action.type) {
     case "RESET":
@@ -130,7 +147,7 @@ export const PaymentSuccessAnimation: React.FC<PaymentSuccessAnimationProps> = (
 }) => {
   const t = useTranslations();
   // Respect OS-level "prefer reduced motion" setting (#980)
-  const prefersReducedMotion = useReducedMotion();
+  const prefersReducedMotion = usePrefersReducedMotion();
   const hasTriggeredConfettiRef = useRef(false);
   const completeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
