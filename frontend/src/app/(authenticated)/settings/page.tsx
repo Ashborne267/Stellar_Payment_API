@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
@@ -25,7 +26,6 @@ import { useDisplayPreferences } from "@/lib/display-preferences";
 import WebhookHealthIndicator from "@/components/WebhookHealthIndicator";
 import DangerZone from "@/components/DangerZone";
 import { EmailReceiptPreview } from "@/components/EmailReceiptPreview";
-import UserPermissionsManager from "@/components/UserPermissionsManager";
 import SettingsPanelSkeleton from "@/components/SettingsPanelSkeleton";
 import { Spinner } from "@/components/ui/Spinner";
 import {
@@ -36,6 +36,13 @@ import {
 } from "./accessibility";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const UserPermissionsManager = dynamic(
+  () => import("@/components/UserPermissionsManager"),
+  {
+    ssr: false,
+    loading: () => <SettingsPanelSkeleton />,
+  },
+);
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
 const DEFAULT_BRANDING = {
   primary_color: "#5ef2c0",
@@ -1327,7 +1334,16 @@ export default function SettingsPage() {
 
           {/* Permissions Tab */}
           {activeTab === "permissions" && (
-            <UserPermissionsManager />
+            <div
+              id={getSettingsPanelDomId("permissions")}
+              role="tabpanel"
+              aria-label={t("navPermissions")}
+              aria-labelledby="permissions-tab permissions-tab-mobile"
+              tabIndex={0}
+              className="rounded-2xl border border-[#E8E8E8] bg-white p-8"
+            >
+              <UserPermissionsManager showCategories />
+            </div>
           )}
 
           {/* Danger Tab */}
