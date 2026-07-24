@@ -44,6 +44,11 @@ const DEFAULT_BRANDING = {
   background_color: "#050608",
   logo_url: null as string | null,
 };
+const BRANDING_FIELD_LABEL_KEYS: Record<string, string> = {
+  primary_color: "primary",
+  secondary_color: "secondary",
+  background_color: "background",
+};
 
 
 interface WebhookDomainVerification {
@@ -316,17 +321,18 @@ export default function SettingsDashboardClient() {
           headers: { "x-api-key": apiKey },
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Failed to load branding");
+        if (!res.ok) throw new Error(data.error ?? t("failedToLoadBranding"));
         setBranding(data.branding_config ?? DEFAULT_BRANDING);
       } catch (err: unknown) {
         setBrandingError(
-          err instanceof Error ? err.message : "Failed to load branding",
+          err instanceof Error ? err.message : t("failedToLoadBranding"),
         );
       } finally {
         setLoadingBranding(false);
       }
     };
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t is not stable across renders and must not retrigger this fetch
   }, [apiKey]);
 
   useEffect(() => {
@@ -339,7 +345,7 @@ export default function SettingsDashboardClient() {
         });
         const data = await res.json();
         if (!res.ok)
-          throw new Error(data.error ?? "Failed to load webhook settings");
+          throw new Error(data.error ?? t("failedToLoadWebhookSettings"));
         setWebhookUrl(data.webhook_url ?? "");
         setWebhookSecretMasked(data.webhook_secret_masked ?? "");
         setWebhookVerification(data.webhook_domain_verification ?? null);
@@ -347,13 +353,14 @@ export default function SettingsDashboardClient() {
         setWebhookSaveError(
           err instanceof Error
             ? err.message
-            : "Failed to load webhook settings",
+            : t("failedToLoadWebhookSettings"),
         );
       } finally {
         setLoadingWebhook(false);
       }
     };
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- t is not stable across renders and must not retrigger this fetch
   }, [apiKey]);
 
   const confirmRotate = useCallback(async () => {
@@ -366,21 +373,19 @@ export default function SettingsDashboardClient() {
         headers: { "x-api-key": apiKey },
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to rotate key");
+      if (!res.ok) throw new Error(data.error ?? t("failedToRotateKey"));
       setApiKey(data.api_key);
       setRevealed(true);
       setConfirming(false);
-      toast.success(
-        "API key rotated — update any integrations using the old key.",
-      );
+      toast.success(t("apiKeyRotatedSuccess"));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to rotate key";
+      const msg = err instanceof Error ? err.message : t("failedToRotateKey");
       setRotateError(msg);
       toast.error(msg);
     } finally {
       setRotating(false);
     }
-  }, [apiKey, setApiKey]);
+  }, [apiKey, setApiKey, t]);
 
   const updateBrandingField = useCallback(
     (key: keyof typeof DEFAULT_BRANDING, value: string | null) => {
@@ -397,17 +402,17 @@ export default function SettingsDashboardClient() {
       const file = files[0];
       if (!file) return;
       if (file.size > 2 * 1024 * 1024) {
-        toast.error("Image must be under 2MB");
+        toast.error(t("imageSizeLimit"));
         return;
       }
       const reader = new FileReader();
       reader.onload = () => {
         updateBrandingField("logo_url", reader.result as string);
-        toast.success("Logo uploaded!");
+        toast.success(t("logoUploaded"));
       };
       reader.readAsDataURL(file);
     },
-    [updateBrandingField],
+    [updateBrandingField, t],
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -426,7 +431,9 @@ export default function SettingsDashboardClient() {
     for (const [k, v] of Object.entries(branding)) {
       if (k === "logo_url") continue;
       if (!HEX_COLOR_REGEX.test(v as string)) {
-        setBrandingError(`${k} must be a valid hex color`);
+        setBrandingError(
+          t("hexColorRequired", { field: t(BRANDING_FIELD_LABEL_KEYS[k] ?? k) }),
+        );
         return;
       }
     }
@@ -439,23 +446,23 @@ export default function SettingsDashboardClient() {
           body: JSON.stringify(branding),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Failed to save branding");
+        if (!res.ok) throw new Error(data.error ?? t("failedToSaveBranding"));
         setBranding(data.branding_config ?? branding);
-        toast.success("Branding saved");
+        toast.success(t("brandingSaved"));
       }
     );
-  }, [apiKey, branding, executeBrandingUpdate, setBranding]);
+  }, [apiKey, branding, executeBrandingUpdate, setBranding, t]);
 
   const validateWebhookUrl = useCallback((url: string) => {
     if (!url.trim()) return null;
     try {
       const p = new URL(url);
-      if (p.protocol !== "https:") return "Webhook URL must use HTTPS";
+      if (p.protocol !== "https:") return t("webhookUrlMustBeHttps");
       return null;
     } catch {
-      return "Invalid URL (e.g. https://example.com/webhook)";
+      return t("webhookUrlInvalid");
     }
-  }, []);
+  }, [t]);
 
   const handleWebhookUrlChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -483,15 +490,15 @@ export default function SettingsDashboardClient() {
           body: JSON.stringify({ webhook_url: optimisticUrl || undefined }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? "Failed to save webhook URL");
+        if (!res.ok) throw new Error(data.error ?? t("failedToSaveWebhookUrl"));
         setWebhookUrl(data.webhook_url ?? "");
         setWebhookVerification(data.webhook_domain_verification ?? null);
         toast.success(
-          data.webhook_url ? "Webhook URL saved" : "Webhook URL cleared",
+          data.webhook_url ? t("webhookUrlSaved") : t("webhookUrlCleared"),
         );
       }
     );
-  }, [apiKey, webhookUrl, validateWebhookUrl, executeWebhookUpdate, setWebhookUrl]);
+  }, [apiKey, webhookUrl, validateWebhookUrl, executeWebhookUpdate, setWebhookUrl, t]);
 
   const verifyWebhookDomain = useCallback(async () => {
     if (!apiKey) return;
@@ -504,22 +511,22 @@ export default function SettingsDashboardClient() {
       });
       const data = await res.json();
       if (!res.ok)
-        throw new Error(data.error ?? "Failed to verify webhook domain");
+        throw new Error(data.error ?? t("failedToVerifyDomain"));
       setWebhookVerification(data.webhook_domain_verification ?? null);
       toast.success(
         data.webhook_domain_verification?.status === "verified"
-          ? "Domain verified"
-          : "Domain still unverified",
+          ? t("domainVerified")
+          : t("domainStillUnverified"),
       );
     } catch (err: unknown) {
       const msg =
-        err instanceof Error ? err.message : "Failed to verify domain";
+        err instanceof Error ? err.message : t("failedToVerifyDomain");
       setWebhookSaveError(msg);
       toast.error(msg);
     } finally {
       setVerifyingWebhookDomain(false);
     }
-  }, [apiKey]);
+  }, [apiKey, t]);
 
   const regenerateWebhookSecret = useCallback(async () => {
     if (!apiKey) return;
@@ -531,20 +538,20 @@ export default function SettingsDashboardClient() {
         headers: { "x-api-key": apiKey },
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Failed to regenerate secret");
+      if (!res.ok) throw new Error(data.error ?? t("failedToRegenerateSecret"));
       setWebhookNewSecret(data.webhook_secret);
       setWebhookRevealedSecret(true);
       setConfirmRegenSecret(false);
-      toast.success("Webhook secret regenerated — update your integrations.");
+      toast.success(t("webhookSecretRegenerated"));
     } catch (err: unknown) {
       const msg =
-        err instanceof Error ? err.message : "Failed to regenerate secret";
+        err instanceof Error ? err.message : t("failedToRegenerateSecret");
       setWebhookSaveError(msg);
       toast.error(msg);
     } finally {
       setRegeneratingSecret(false);
     }
-  }, [apiKey]);
+  }, [apiKey, t]);
 
   const testWebhook = useCallback(async () => {
     if (!apiKey) return;
@@ -556,16 +563,16 @@ export default function SettingsDashboardClient() {
         headers: { "x-api-key": apiKey },
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Test webhook request failed");
-      toast.success(`Test webhook sent — status ${data.status}`);
+      if (!res.ok) throw new Error(data.error ?? t("testWebhookRequestFailed"));
+      toast.success(t("testWebhookSentStatus", { status: data.status }));
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Failed to test webhook";
+      const msg = err instanceof Error ? err.message : t("failedToTestWebhook");
       toast.error(msg);
       setWebhookSaveError(msg);
     } finally {
       setTestingWebhook(false);
     }
-  }, [apiKey]);
+  }, [apiKey, t]);
 
   const displayKey = useMemo(
     () => (revealed ? apiKey : mask(apiKey ?? "")),
@@ -992,7 +999,7 @@ export default function SettingsDashboardClient() {
                       onChange={(e) =>
                         updateBrandingField(field, e.target.value)
                       }
-                      aria-label={`${label} color picker`}
+                      aria-label={t("colorPickerLabel", { label })}
                       className="h-10 w-12 shrink-0 rounded-lg border border-[#E8E8E8] bg-white p-1 cursor-pointer"
                     />
                     <div className="flex min-w-0 flex-1 flex-col gap-1">

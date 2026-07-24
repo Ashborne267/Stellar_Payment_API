@@ -12,7 +12,8 @@ import * as displayPreferences from "@/lib/display-preferences";
 // ── Mocks ──────────────────────────────────────────────────────────────────
 
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => (key: string, params?: Record<string, unknown>) =>
+    params ? `${key} ${Object.values(params).join(" ")}` : key,
 }));
 
 vi.mock("framer-motion", () => ({
@@ -280,7 +281,7 @@ describe("SettingsDashboardClient", () => {
 
     it("renders color inputs", async () => {
       await openBranding();
-      expect(screen.getByLabelText(/primary color picker/i)).toBeInTheDocument();
+      expect(screen.getByLabelText(/colorPickerLabel primary/i)).toBeInTheDocument();
     });
 
     it("calls save branding API", async () => {
@@ -333,7 +334,7 @@ describe("SettingsDashboardClient", () => {
       const user = await openWebhooks();
       await user.clear(screen.getByLabelText("endpointUrl"));
       await user.type(screen.getByLabelText("endpointUrl"), "http://example.com");
-      expect(await screen.findByText("Webhook URL must use HTTPS")).toBeInTheDocument();
+      expect(await screen.findByText("webhookUrlMustBeHttps")).toBeInTheDocument();
     });
 
     it("calls save webhook API", async () => {
