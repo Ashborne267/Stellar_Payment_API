@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import {
   useCallback,
   useEffect,
@@ -26,6 +25,7 @@ import { useDisplayPreferences } from "@/lib/display-preferences";
 import WebhookHealthIndicator from "@/components/WebhookHealthIndicator";
 import DangerZone from "@/components/DangerZone";
 import { EmailReceiptPreview } from "@/components/EmailReceiptPreview";
+import UserPermissionsManager from "@/components/UserPermissionsManager";
 import SettingsPanelSkeleton from "@/components/SettingsPanelSkeleton";
 import { Spinner } from "@/components/ui/Spinner";
 import {
@@ -36,13 +36,6 @@ import {
 } from "./accessibility";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-const UserPermissionsManager = dynamic(
-  () => import("@/components/UserPermissionsManager"),
-  {
-    ssr: false,
-    loading: () => <SettingsPanelSkeleton />,
-  },
-);
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
 const DEFAULT_BRANDING = {
   primary_color: "#5ef2c0",
@@ -51,13 +44,225 @@ const DEFAULT_BRANDING = {
   logo_url: null as string | null,
 };
 
-/**
- * RSC page — mounts the interactive client SettingsWidget.
- * Any server-only work (e.g. reading cookies, fetching public config)
- * can be added here and passed down as props to SettingsWidget without
- * bloating the client bundle.
- */
-export default function SettingsPage() {
+
+interface WebhookDomainVerification {
+  status: "verified" | "unverified";
+  domain: string | null;
+  verification_token: string | null;
+  verification_file_url: string | null;
+  checked_at: string | null;
+  verified_at: string | null;
+  failure_reason: string | null;
+}
+
+function normalizeHexInput(v: string) {
+  const t = v.trim();
+  return t.startsWith("#") ? t : `#${t}`;
+}
+
+function hexToRgb(hex: string) {
+  const clean = hex.replace("#", "");
+  const full =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((c) => `${c}${c}`)
+          .join("")
+      : clean;
+  const int = Number.parseInt(full, 16);
+  return { r: (int >> 16) & 255, g: (int >> 8) & 255, b: int & 255 };
+}
+
+function luminance(hex: string) {
+  const { r, g, b } = hexToRgb(hex);
+  const t = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * t(r) + 0.7152 * t(g) + 0.0722 * t(b);
+}
+
+function contrastRatio(fg: string, bg: string) {
+  const l1 = luminance(fg),
+    l2 = luminance(bg);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+
+function mask(key: string) {
+  if (key.length <= 12) return "•".repeat(key.length);
+  return key.slice(0, 7) + "•".repeat(key.length - 13) + key.slice(-6);
+}
+
+function EyeIcon({ open }: { open: boolean }) {
+  return open ? (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle
+        cx="12"
+        cy="12"
+        r="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ) : (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        d="M17.94 17.94A10.1 10.1 0 0 1 12 19c-6.4 0-10-7-10-7a18.1 18.1 0 0 1 5.06-5.94M9.9 4.24A9.1 9.1 0 0 1 12 4c6.4 0 10 7 10 7a18.1 18.1 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <line x1="1" y1="1" x2="23" y2="23" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function buildNavItems(t: (key: string) => string): {
+  id: SettingsTab;
+  label: string;
+  icon: React.ReactNode;
+  danger?: boolean;
+}[] {
+  return [
+  {
+    id: "api",
+    label: t("navApiKeys"),
+    icon: (
+      <svg
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "branding",
+    label: t("navBranding"),
+    icon: (
+      <svg
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "display",
+    label: t("navDisplay"),
+    icon: (
+      <svg
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "webhooks",
+    label: t("navWebhooks"),
+    icon: (
+      <svg
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "permissions",
+    label: t("navPermissions"),
+    icon: (
+      <svg
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a3 3 0 11-6 0 3 3 0 016 0z"
+        />
+      </svg>
+    ),
+  },
+  {
+    id: "danger",
+    label: t("navDanger"),
+    icon: (
+      <svg
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+        />
+      </svg>
+    ),
+    danger: true,
+  },
+  ];
+}
+
+export default function SettingsWidget() {
   const t = useTranslations("settingsPage");
   const navItems = useMemo(() => buildNavItems(t), [t]);
   const apiKey = useMerchantApiKey();
@@ -1122,16 +1327,7 @@ export default function SettingsPage() {
 
           {/* Permissions Tab */}
           {activeTab === "permissions" && (
-            <div
-              id={getSettingsPanelDomId("permissions")}
-              role="tabpanel"
-              aria-label={t("navPermissions")}
-              aria-labelledby="permissions-tab permissions-tab-mobile"
-              tabIndex={0}
-              className="rounded-2xl border border-[#E8E8E8] bg-white p-8"
-            >
-              <UserPermissionsManager showCategories />
-            </div>
+            <UserPermissionsManager />
           )}
 
           {/* Danger Tab */}

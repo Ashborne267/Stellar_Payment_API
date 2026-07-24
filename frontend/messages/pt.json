@@ -416,5 +416,17 @@
     "regenerateSecretWarning": "O segredo atual deixara de funcionar imediatamente.",
     "regenerating": "Regenerando…",
     "dangerZoneDescription": "Acoes irreversiveis. Prossiga com cautela."
+  },
+  "notificationCenter": {
+    "buttonLabel": "Notificacoes",
+    "buttonLabelWithCount": "Notificacoes ({count} nao lidas)",
+    "panelLabel": "Central de Notificacoes",
+    "heading": "Notificacoes",
+    "unreadCount": "{count} nao lidas",
+    "noAlerts": "Sem novos alertas",
+    "alertLabel": "Alerta",
+    "dismissLabel": "Dispensar notificacao: {message}",
+    "notificationLabel": "Notificacao: {message}",
+    "timestampLabel": "Carimbo de data/hora: {timestamp}"
   }
 }
