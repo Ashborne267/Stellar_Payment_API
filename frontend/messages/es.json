@@ -452,5 +452,25 @@
     "dismissLabel": "Descartar notificación: {message}",
     "notificationLabel": "Notificación: {message}",
     "timestampLabel": "Marca de tiempo: {timestamp}"
+  },
+  "fiatOnramp": {
+    "title": "Comprar / Depositar Fondos",
+    "triggerLabel": "Comprar / Depositar",
+    "description": "Deposita fiat a traves de un anchor de Stellar (SEP-0024). Los fondos llegan como tokens directamente a tu billetera conectada.",
+    "selectAsset": "Seleccionar Activo",
+    "amountLabel": "Monto",
+    "amountOptional": "(opcional)",
+    "amountPlaceholder": "ej. {amount} {asset}",
+    "anchorDomainLabel": "Dominio del Anchor",
+    "anchorDomainPlaceholder": "ej. testanchor.stellar.org",
+    "continueButton": "Continuar al Anchor",
+    "footerNote": "Protegido por la red Stellar - Estandar SEP-0024",
+    "stepConnecting": "Conectando con el anchor...",
+    "stepAuth": "Esperando firma de la billetera...",
+    "stepGenerating": "Preparando tu formulario de deposito...",
+    "authHint": "Firma la transaccion de desafio en tu billetera para conectarte de forma segura a {domain}.",
+    "genericHint": "Esto solo deberia tomar un momento.",
+    "iframeTitle": "Formulario de deposito del anchor",
+    "genericError": "El deposito fallo"
   }
 }

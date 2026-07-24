@@ -2,8 +2,41 @@ import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
+import { NextIntlClientProvider } from "next-intl";
 
 import FiatOnrampModal from "./FiatOnrampModal";
+
+const messages = {
+  fiatOnramp: {
+    title: "Buy / Deposit Funds",
+    triggerLabel: "Buy / Deposit",
+    description:
+      "Deposit fiat via a Stellar anchor (SEP-0024). Funds arrive as tokens directly in your connected wallet.",
+    selectAsset: "Select Asset",
+    amountLabel: "Amount",
+    amountOptional: "(optional)",
+    amountPlaceholder: "e.g. {amount} {asset}",
+    anchorDomainLabel: "Anchor Domain",
+    anchorDomainPlaceholder: "e.g. testanchor.stellar.org",
+    continueButton: "Continue to Anchor",
+    footerNote: "Secured by Stellar Network - SEP-0024 Standard",
+    stepConnecting: "Connecting to anchor...",
+    stepAuth: "Waiting for wallet signature...",
+    stepGenerating: "Preparing your deposit form...",
+    authHint: "Please sign the challenge transaction in your wallet to securely connect to {domain}.",
+    genericHint: "This should only take a moment.",
+    iframeTitle: "Anchor deposit form",
+    genericError: "Deposit failed",
+  },
+};
+
+function renderModal(props: { isOpen: boolean; onClose: () => void }) {
+  return render(
+    <NextIntlClientProvider locale="en" messages={messages}>
+      <FiatOnrampModal {...props} />
+    </NextIntlClientProvider>,
+  );
+}
 
 // ─── framer-motion mock ───────────────────────────────────────────────────────
 // jsdom has no layout engine so framer-motion's measurement APIs fail; strip
@@ -56,12 +89,12 @@ describe("FiatOnrampModal", () => {
   });
 
   it("does not render when closed", () => {
-    render(<FiatOnrampModal isOpen={false} onClose={vi.fn()} />);
+    renderModal({ isOpen: false, onClose: vi.fn() });
     expect(screen.queryByText("Buy / Deposit Funds")).not.toBeInTheDocument();
   });
 
   it("renders the asset selection form when open", () => {
-    render(<FiatOnrampModal isOpen onClose={vi.fn()} />);
+    renderModal({ isOpen: true, onClose: vi.fn() });
     expect(screen.getByText("Buy / Deposit Funds")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /USDC/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /SRT/ })).toBeInTheDocument();
@@ -69,7 +102,7 @@ describe("FiatOnrampModal", () => {
   });
 
   it("lets the user switch the selected asset", () => {
-    render(<FiatOnrampModal isOpen onClose={vi.fn()} />);
+    renderModal({ isOpen: true, onClose: vi.fn() });
     const usdcButton = screen.getByRole("button", { name: /USDC/ });
     const srtButton = screen.getByRole("button", { name: /SRT/ });
 
@@ -83,7 +116,7 @@ describe("FiatOnrampModal", () => {
   });
 
   it("walks through connecting, auth, and generating loading states before showing the interactive iframe", async () => {
-    render(<FiatOnrampModal isOpen onClose={vi.fn()} />);
+    renderModal({ isOpen: true, onClose: vi.fn() });
 
     fireEvent.click(screen.getByRole("button", { name: "Continue to Anchor" }));
 
@@ -112,7 +145,7 @@ describe("FiatOnrampModal", () => {
   });
 
   it("passes the entered amount through to initiateDeposit", async () => {
-    render(<FiatOnrampModal isOpen onClose={vi.fn()} />);
+    renderModal({ isOpen: true, onClose: vi.fn() });
 
     fireEvent.change(screen.getByLabelText(/Amount/), { target: { value: "250" } });
     fireEvent.click(screen.getByRole("button", { name: "Continue to Anchor" }));
@@ -131,7 +164,7 @@ describe("FiatOnrampModal", () => {
   it("shows an inline error and returns to the select step when the wallet is unavailable", async () => {
     mockGetFreighterPublicKey.mockRejectedValue(new Error("Freighter is not installed"));
 
-    render(<FiatOnrampModal isOpen onClose={vi.fn()} />);
+    renderModal({ isOpen: true, onClose: vi.fn() });
     fireEvent.click(screen.getByRole("button", { name: "Continue to Anchor" }));
 
     await waitFor(() => {
@@ -144,7 +177,7 @@ describe("FiatOnrampModal", () => {
 
   it("resets state and calls onClose when closed", () => {
     const onClose = vi.fn();
-    render(<FiatOnrampModal isOpen onClose={onClose} />);
+    renderModal({ isOpen: true, onClose });
 
     fireEvent.click(screen.getByTestId("modal-close"));
 

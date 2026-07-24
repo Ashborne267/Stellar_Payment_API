@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import {
@@ -33,14 +34,16 @@ const SUPPORTED_ASSETS = [
 ];
 
 type Step = "SELECT" | "CONNECTING" | "AUTH" | "GENERATING" | "INTERACTIVE";
+type BusyStep = Exclude<Step, "SELECT" | "INTERACTIVE">;
 
-const STEP_MESSAGE: Record<Exclude<Step, "SELECT" | "INTERACTIVE">, string> = {
-  CONNECTING: "Connecting to anchor…",
-  AUTH: "Waiting for wallet signature…",
-  GENERATING: "Preparing your deposit form…",
+const STEP_MESSAGE_KEY: Record<BusyStep, "stepConnecting" | "stepAuth" | "stepGenerating"> = {
+  CONNECTING: "stepConnecting",
+  AUTH: "stepAuth",
+  GENERATING: "stepGenerating",
 };
 
 export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProps) {
+  const t = useTranslations("fiatOnramp");
   const [step, setStep] = useState<Step>("SELECT");
   const [amount, setAmount] = useState("");
   const [anchorDomain, setAnchorDomain] = useState(DEFAULT_ANCHOR);
@@ -96,15 +99,15 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
       setInteractiveUrl(url);
       setStep("INTERACTIVE");
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Deposit failed";
+      const message = err instanceof Error ? err.message : t("genericError");
       toast.error(message);
       setError(message);
       setStep("SELECT");
     }
-  }, [anchorDomain, amount, selectedAsset]);
+  }, [anchorDomain, amount, selectedAsset, t]);
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Buy / Deposit Funds">
+    <Modal isOpen={isOpen} onClose={handleClose} title={t("title")}>
       <AnimatePresence mode="wait">
         {step === "SELECT" && (
           <motion.div
@@ -115,10 +118,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
             transition={{ duration: 0.18 }}
             className="flex flex-col gap-6"
           >
-            <p className="text-sm text-slate-400">
-              Deposit fiat via a Stellar anchor (SEP-0024). Funds arrive as tokens directly
-              in your connected wallet.
-            </p>
+            <p className="text-sm text-slate-400">{t("description")}</p>
 
             {error && (
               <div
@@ -131,7 +131,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
 
             <div className="space-y-2">
               <label className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Select Asset
+                {t("selectAsset")}
               </label>
               <div className="grid grid-cols-2 gap-4">
                 {SUPPORTED_ASSETS.map((asset) => (
@@ -158,7 +158,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
 
             <div className="space-y-2">
               <label htmlFor="onramp-amount" className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Amount <span className="normal-case text-slate-600">(optional)</span>
+                {t("amountLabel")} <span className="normal-case text-slate-600">{t("amountOptional")}</span>
               </label>
               <input
                 id="onramp-amount"
@@ -168,13 +168,13 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
                 onChange={(e) => setAmount(e.target.value)}
                 disabled={isBusy}
                 className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-mint disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder={`e.g. 100 ${selectedAsset.code}`}
+                placeholder={t("amountPlaceholder", { amount: "100", asset: selectedAsset.code })}
               />
             </div>
 
             <div className="space-y-2">
               <label htmlFor="onramp-anchor" className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                Anchor Domain
+                {t("anchorDomainLabel")}
               </label>
               <input
                 id="onramp-anchor"
@@ -183,7 +183,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
                 onChange={(e) => setAnchorDomain(e.target.value)}
                 disabled={isBusy}
                 className="w-full rounded-xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white focus:outline-none focus:ring-1 focus:ring-mint disabled:cursor-not-allowed disabled:opacity-50"
-                placeholder="e.g. testanchor.stellar.org"
+                placeholder={t("anchorDomainPlaceholder")}
               />
             </div>
 
@@ -196,10 +196,10 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
               {isBusy ? (
                 <>
                   <Spinner size="sm" className="text-black" />
-                  {STEP_MESSAGE[step as Exclude<Step, "SELECT" | "INTERACTIVE">]}
+                  {t(STEP_MESSAGE_KEY[step as BusyStep])}
                 </>
               ) : (
-                "Continue to Anchor"
+                t("continueButton")
               )}
             </button>
           </motion.div>
@@ -222,11 +222,9 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
                 <Spinner size="lg" className="text-mint" />
               </div>
             </div>
-            <h3 className="text-lg font-bold text-white">{STEP_MESSAGE[step]}</h3>
+            <h3 className="text-lg font-bold text-white">{t(STEP_MESSAGE_KEY[step as BusyStep])}</h3>
             <p className="mt-2 text-sm text-slate-400">
-              {step === "AUTH"
-                ? `Please sign the challenge transaction in your wallet to securely connect to ${anchorDomain}.`
-                : "This should only take a moment."}
+              {step === "AUTH" ? t("authHint", { domain: anchorDomain }) : t("genericHint")}
             </p>
           </motion.div>
         )}
@@ -249,7 +247,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
             )}
             <iframe
               src={interactiveUrl}
-              title="Anchor deposit form"
+              title={t("iframeTitle")}
               className="h-full w-full"
               onLoad={() => setIframeLoading(false)}
             />
@@ -258,9 +256,7 @@ export default function FiatOnrampModal({ isOpen, onClose }: FiatOnrampModalProp
       </AnimatePresence>
 
       {step !== "INTERACTIVE" && (
-        <p className="mt-6 text-center text-xs text-slate-500">
-          Secured by Stellar Network • SEP-0024 Standard
-        </p>
+        <p className="mt-6 text-center text-xs text-slate-500">{t("footerNote")}</p>
       )}
     </Modal>
   );

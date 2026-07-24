@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import DashboardSkeleton from "@/components/DashboardSkeleton";
 import Link from "next/link";
 import {
@@ -15,6 +16,7 @@ import PaymentsTabs from "@/components/PaymentsTabs";
 import FiatOnrampModal from "@/components/FiatOnrampModal";
 
 export default function DashboardPage() {
+  const t = useTranslations("fiatOnramp");
   const [isFirstKeyModalOpen, setIsFirstKeyModalOpen] = useState(false);
   const [isOnrampModalOpen, setIsOnrampModalOpen] = useState(false);
   const hydrated = useMerchantHydrated();
@@ -91,7 +93,7 @@ export default function DashboardPage() {
                 d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            Buy / Deposit
+            {t("triggerLabel")}
           </button>
 
           <Link
