@@ -1,4 +1,29 @@
 {
+  "twoFactorAuth": {
+    "ariaLabel": "Configuracion de autenticacion en dos pasos",
+    "stepsLabel": "Pasos de configuracion",
+    "title": "Activar autenticacion en dos pasos",
+    "description": "Protege tu cuenta con una aplicacion de autenticacion. Necesitaras escanear un codigo QR para comenzar.",
+    "enableButton": "Activar 2FA",
+    "settingUp": "Configurando…",
+    "scanTitle": "Escanea con tu aplicacion de autenticacion",
+    "scanDescription": "Usa Google Authenticator, Authy o cualquier aplicacion compatible con TOTP para escanear el codigo.",
+    "qrCodeAlt": "Codigo QR TOTP — escanea con tu aplicacion de autenticacion",
+    "qrCodeSkeletonLabel": "Generando codigo QR…",
+    "manualKeyLabel": "O ingresa la clave manualmente",
+    "manualKeyAria": "Clave de configuracion manual: {key}",
+    "codeInputLabel": "Ingresa el codigo de 6 digitos",
+    "codeInputPlaceholder": "000000",
+    "verifyButton": "Verificar y activar",
+    "verifying": "Verificando…",
+    "successTitle": "Autenticacion en dos pasos activada",
+    "successDescription": "Tu cuenta esta ahora protegida. Se te pedira un codigo en cada inicio de sesion.",
+    "error": {
+      "setupFailed": "No se pudo iniciar la configuracion de 2FA. Intentalo de nuevo.",
+      "invalidCode": "Codigo invalido. Intentalo de nuevo.",
+      "codeLength": "Ingresa el codigo de 6 digitos de tu aplicacion de autenticacion."
+    }
+  },
   "localeSwitcher": {
     "label": "Idioma",
     "ariaLabel": "Seleccionar idioma",

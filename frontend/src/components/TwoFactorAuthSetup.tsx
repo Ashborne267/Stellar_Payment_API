@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useId } from "react";
+import { useTranslations } from "next-intl";
 import { Spinner } from "./ui/Spinner";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -18,12 +19,12 @@ interface TwoFactorAuthSetupProps {
 
 // ── Skeleton helpers ─────────────────────────────────────────────────────────
 
-function QrSkeleton() {
+function QrSkeleton({ t }: { t: ReturnType<typeof useTranslations> }) {
   return (
     <div
       className="mx-auto h-48 w-48 animate-pulse rounded-xl bg-white/10"
       aria-busy="true"
-      aria-label="Generating QR code…"
+      aria-label={t("qrCodeSkeletonLabel")}
       role="img"
     />
   );
@@ -70,6 +71,7 @@ export function TwoFactorAuthSetup({
   onVerifyCode,
 }: TwoFactorAuthSetupProps) {
   const codeInputId = useId();
+  const t = useTranslations("twoFactorAuth");
   const [step, setStep] = useState<SetupStep>("idle");
   const [code, setCode] = useState("");
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -92,7 +94,7 @@ export function TwoFactorAuthSetup({
       setManualKey(result.manualKey);
       setStep("scan");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start 2FA setup. Please try again.");
+      setError(err instanceof Error ? err.message : t("error.setupFailed"));
       setStep("idle");
     }
   };
@@ -101,7 +103,7 @@ export function TwoFactorAuthSetup({
 
   const handleVerify = async () => {
     if (code.trim().length !== 6) {
-      setError("Please enter the 6-digit code from your authenticator app.");
+      setError(t("error.codeLength"));
       return;
     }
     setStep("verifying");
@@ -112,7 +114,7 @@ export function TwoFactorAuthSetup({
       setStep("success");
       onComplete?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invalid code. Please try again.");
+      setError(err instanceof Error ? err.message : t("error.invalidCode"));
       setStep("scan");
     }
   };
@@ -124,12 +126,12 @@ export function TwoFactorAuthSetup({
 
   return (
     <section
-      aria-label="Two-factor authentication setup"
+      aria-label={t("ariaLabel")}
       aria-busy={isBusy}
       className="flex flex-col gap-6"
     >
       {/* Progress indicator */}
-      <div className="flex items-center gap-0" role="list" aria-label="Setup steps">
+      <div className="flex items-center gap-0" role="list" aria-label={t("stepsLabel")}>
         <div role="listitem">
           <StepDot active={step === "idle" || step === "enabling"} done={scanVisible || isDone} label="1" />
         </div>
@@ -153,9 +155,9 @@ export function TwoFactorAuthSetup({
             </svg>
           </div>
           <div>
-            <h3 className="text-base font-semibold text-white">Enable Two-Factor Authentication</h3>
+            <h3 className="text-base font-semibold text-white">{t("title")}</h3>
             <p className="mt-1 text-sm text-slate-400">
-              Protect your account with an authenticator app. You will need to scan a QR code to get started.
+              {t("description")}
             </p>
           </div>
           <button
@@ -168,10 +170,10 @@ export function TwoFactorAuthSetup({
             {isEnabling ? (
               <>
                 <Spinner size="sm" aria-hidden="true" />
-                <span>Setting up…</span>
+                <span>{t("settingUp")}</span>
               </>
             ) : (
-              "Enable 2FA"
+              t("enableButton")
             )}
           </button>
         </div>
@@ -181,9 +183,9 @@ export function TwoFactorAuthSetup({
       {scanVisible && (
         <div className="flex flex-col gap-5">
           <div>
-            <h3 className="text-sm font-semibold text-white">Scan with your authenticator app</h3>
+            <h3 className="text-sm font-semibold text-white">{t("scanTitle")}</h3>
             <p className="mt-1 text-xs text-slate-400">
-              Use Google Authenticator, Authy, or any TOTP-compatible app to scan the code below.
+              {t("scanDescription")}
             </p>
           </div>
 
@@ -192,21 +194,21 @@ export function TwoFactorAuthSetup({
             {qrDataUrl ? (
               <img
                 src={qrDataUrl}
-                alt="TOTP QR code — scan with your authenticator app"
+                alt={t("qrCodeAlt")}
                 className="h-48 w-48 rounded-xl border border-white/10 bg-white p-2"
                 width={192}
                 height={192}
               />
             ) : (
-              <QrSkeleton />
+              <QrSkeleton t={t} />
             )}
           </div>
 
           {/* Manual key fallback */}
           {manualKey && (
             <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-              <p className="text-[10px] uppercase tracking-widest text-slate-500">Or enter key manually</p>
-              <p className="mt-1 break-all font-mono text-xs text-mint" aria-label={`Manual setup key: ${manualKey}`}>
+              <p className="text-[10px] uppercase tracking-widest text-slate-500">{t("manualKeyLabel")}</p>
+              <p className="mt-1 break-all font-mono text-xs text-mint" aria-label={t("manualKeyAria", { key: manualKey })}>
                 {manualKey}
               </p>
             </div>
@@ -215,7 +217,7 @@ export function TwoFactorAuthSetup({
           {/* Code input */}
           <div className="flex flex-col gap-2">
             <label htmlFor={codeInputId} className="text-xs font-semibold text-white">
-              Enter 6-digit code
+              {t("codeInputLabel")}
             </label>
             <input
               id={codeInputId}
@@ -232,7 +234,7 @@ export function TwoFactorAuthSetup({
               aria-busy={isVerifying}
               aria-invalid={!!error && step === "scan"}
               aria-describedby={error ? "2fa-error" : undefined}
-              placeholder="000000"
+              placeholder={t("codeInputPlaceholder")}
               className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-center font-mono text-xl tracking-[0.4em] text-white placeholder:text-slate-600 focus:border-mint/50 focus:outline-none focus:ring-1 focus:ring-mint/50 disabled:opacity-50"
             />
             {error && (
@@ -252,10 +254,10 @@ export function TwoFactorAuthSetup({
             {isVerifying ? (
               <>
                 <Spinner size="sm" aria-hidden="true" />
-                <span>Verifying…</span>
+                <span>{t("verifying")}</span>
               </>
             ) : (
-              "Verify & Enable"
+              t("verifyButton")
             )}
           </button>
         </div>
@@ -270,9 +272,9 @@ export function TwoFactorAuthSetup({
             </svg>
           </div>
           <div>
-            <h3 className="text-base font-semibold text-white">Two-Factor Authentication Enabled</h3>
+            <h3 className="text-base font-semibold text-white">{t("successTitle")}</h3>
             <p className="mt-1 text-sm text-slate-400">
-              Your account is now protected. You will be prompted for a code on each login.
+              {t("successDescription")}
             </p>
           </div>
         </div>
