@@ -573,5 +573,70 @@
     "successTitle": "KYC enviado com sucesso!",
     "successDescription": "Sua verificacao KYC foi enviada e esta em revisao.",
     "dash": "—"
+  },
+  "multisigModal": {
+    "title": "Aprovação Multi-Assinatura",
+    "closeModal": "Fechar modal",
+    "stepOf": "Etapa {step} de {total}",
+    "review": {
+      "heading": "Revisar Transação",
+      "description": "Revise os detalhes da transação e assine se aprovar",
+      "sectionAriaLabel": "Seção de revisão de transação",
+      "amount": "Valor",
+      "to": "Para",
+      "memo": "Memo",
+      "signaturesLabel": "Assinaturas ({signed}/{required})",
+      "progressAriaLabel": "Progresso de assinaturas",
+      "signersLabel": "Signatários",
+      "signersListAriaLabel": "Lista de signatários",
+      "signerFallbackName": "Signatário {id}",
+      "signerWeight": "Peso: {weight} • {publicKey}...",
+      "signerAriaLabel": "{name} - Peso: {weight} - {status}",
+      "signedStatus": "Assinado",
+      "notSignedStatus": "Não assinado",
+      "signButton": "Assinar",
+      "signingButton": "Assinando...",
+      "signButtonAriaLabel": "{action} transação como {name}",
+      "expiresIn": "Expira em {time}",
+      "submitButton": "Enviar Transação",
+      "submittingButton": "Enviando..."
+    },
+    "processing": {
+      "heading": "Processando Transação",
+      "description": "Enviando sua transação para a rede Stellar..."
+    },
+    "confirm": {
+      "pendingHeading": "Transação Enviada",
+      "pendingDescription": "Aguardando confirmação da rede...",
+      "hashPendingLabel": "Hash da Transação (pendente)",
+      "confirmingButton": "Confirmando...",
+      "approvedHeading": "Transação Aprovada",
+      "approvedDescription": "Sua transação multi-assinatura foi enviada com sucesso",
+      "hashLabel": "Hash da Transação",
+      "closeButton": "Fechar"
+    },
+    "error": {
+      "heading": "Transação Falhou",
+      "defaultMessage": "Ocorreu um erro ao processar sua transação",
+      "tryAgainButton": "Tentar Novamente",
+      "closeButton": "Fechar",
+      "bannerTitle": "Erro",
+      "clearErrorAriaLabel": "Limpar erro"
+    },
+    "expired": {
+      "heading": "Transação Expirada",
+      "description": "Esta transação expirou e não pode mais ser assinada ou enviada.",
+      "closeButton": "Fechar",
+      "statusLabel": "Transação Expirada"
+    },
+    "announcements": {
+      "processing": "Processando sua transação. Por favor, aguarde.",
+      "confirmed": "Transação aprovada com sucesso.",
+      "failed": "A transação falhou. Veja os detalhes do erro abaixo."
+    },
+    "toasts": {
+      "signed": "Transação assinada com sucesso",
+      "submitted": "Transação enviada com sucesso"
+    }
   }
 }
