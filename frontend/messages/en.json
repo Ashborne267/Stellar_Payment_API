@@ -573,5 +573,15 @@
     "successTitle": "KYC Submitted Successfully!",
     "successDescription": "Your KYC verification has been submitted and is under review.",
     "dash": "—"
+  },
+  "portfolioChartWidget": {
+    "title": "Portfolio Value",
+    "allocation": "Allocation",
+    "trend": "Trend",
+    "loading": "Loading portfolio chart...",
+    "historyLoading": "Loading performance history...",
+    "emptyAllocation": "No allocation data available yet.",
+    "emptyAssets": "No portfolio assets available yet.",
+    "emptyHistory": "No performance history available yet."
   }
 }
