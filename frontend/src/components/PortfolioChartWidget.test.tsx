@@ -27,6 +27,10 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => <div data-testid="cartesian-grid" />,
 }));
 
+vi.mock('next-intl', () => ({
+  useTranslations: () => (key: string) => key,
+}));
+
 describe('PortfolioChartWidget', () => {
   const mockAssets: PortfolioAsset[] = [
     {
@@ -63,7 +67,7 @@ describe('PortfolioChartWidget', () => {
   it('renders the component with portfolio value', () => {
     render(<PortfolioChartWidget {...defaultProps} />);
 
-    expect(screen.getByText('Portfolio Value')).toBeInTheDocument();
+    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
     expect(screen.getByText('$4,000.00')).toBeInTheDocument();
   });
 
@@ -76,8 +80,7 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    // The component should format currency, checking for the value in the DOM
-    const portfolioValue = screen.getByText(/Portfolio Value/i).parentElement;
+    const portfolioValue = screen.getByText(/portfolioChart\.valueTitle/i).parentElement;
     expect(portfolioValue).toBeInTheDocument();
   });
 
@@ -105,14 +108,14 @@ describe('PortfolioChartWidget', () => {
   it('switches between chart types when buttons are clicked', async () => {
     render(<PortfolioChartWidget {...defaultProps} />);
 
-    const trendButton = screen.getByText('Trend');
+    const trendButton = screen.getByText('portfolioChart.trend');
     fireEvent.click(trendButton);
 
     await waitFor(() => {
       expect(screen.getByTestId('line-chart')).toBeInTheDocument();
     });
 
-    const allocationButton = screen.getByText('Allocation');
+    const allocationButton = screen.getByText('portfolioChart.allocation');
     fireEvent.click(allocationButton);
 
     await waitFor(() => {
@@ -134,7 +137,6 @@ describe('PortfolioChartWidget', () => {
       fireEvent.click(assetElement);
     }
 
-    // Should be called (exact behavior depends on component implementation)
     expect(screen.getByText('XLM')).toBeInTheDocument();
   });
 
@@ -145,11 +147,9 @@ describe('PortfolioChartWidget', () => {
 
     if (assetElement) {
       fireEvent.click(assetElement);
-      // Check that the element has selected styling (bg-blue-50)
       expect(assetElement).toHaveClass('bg-blue-50');
 
       fireEvent.click(assetElement);
-      // The selection might be toggled off
       expect(assetElement).toBeInTheDocument();
     }
   });
@@ -164,7 +164,7 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    expect(screen.getByText('Portfolio Value')).toBeInTheDocument();
+    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
     expect(screen.getByText('$0.00')).toBeInTheDocument();
   });
 
@@ -220,7 +220,7 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    expect(screen.getByText('Portfolio Value')).toBeInTheDocument();
+    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
 
     rerender(
       <PortfolioChartWidget
@@ -229,7 +229,7 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    expect(screen.getByText('Portfolio Value')).toBeInTheDocument();
+    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
   });
 
   it('handles currency formatting for different currencies', () => {
@@ -251,8 +251,7 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    // Should render with different currency formatting
-    expect(screen.getByText(/Portfolio Value/)).toBeInTheDocument();
+    expect(screen.getByText(/portfolioChart\.valueTitle/)).toBeInTheDocument();
   });
 
   it('handles large portfolio values', () => {
@@ -275,7 +274,6 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    // Find the total portfolio value (first $20,000.00 in the portfolio value section)
     const portfolioValueTexts = screen.getAllByText('$20,000.00');
     expect(portfolioValueTexts.length).toBeGreaterThan(0);
   });
@@ -284,7 +282,6 @@ describe('PortfolioChartWidget', () => {
     render(<PortfolioChartWidget {...defaultProps} />);
 
     const colorDots = screen.getAllByTestId('cell').length;
-    // Should have color cells for each asset
     expect(colorDots).toBeGreaterThanOrEqual(0);
   });
 });

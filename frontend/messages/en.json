@@ -202,6 +202,11 @@
     "title": "Payment History",
     "description": "Monitor all incoming transactions and their verification status."
   },
+  "portfolioChart": {
+    "valueTitle": "Portfolio Value",
+    "allocation": "Allocation",
+    "trend": "Trend"
+  },
   "recentPayments": {
     "missingApiKey": "API key not found. Please register or log in.",
     "fetchFailed": "Failed to fetch payments",
@@ -573,5 +578,22 @@
     "successTitle": "KYC Submitted Successfully!",
     "successDescription": "Your KYC verification has been submitted and is under review.",
     "dash": "—"
+  },
+  "network": {
+    "status": "Network Status",
+    "refresh": "Check network status",
+    "latency": "Latency",
+    "connection": "Connection",
+    "error": "Error",
+    "lastChecked": "Last checked",
+    "online": "Online",
+    "offline": "Offline",
+    "slow": "Slow",
+    "checking": "Checking...",
+    "connectionQuality": "Connection Quality",
+    "excellent": "Excellent",
+    "good": "Good",
+    "fair": "Fair",
+    "poor": "Poor"
   }
 }

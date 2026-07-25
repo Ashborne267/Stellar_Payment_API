@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence, type Variants } from 'framer-motion';
+import { useTranslations } from 'next-intl';
 import {
   PieChart,
   Pie,
@@ -55,6 +55,7 @@ const DEFAULT_COLORS = [
 /**
  * PortfolioChartWidget - A responsive portfolio visualization component
  * Displays asset allocation with pie chart and includes state management
+ * Optimized: removed framer-motion dependency for smaller bundle size
  */
 export function PortfolioChartWidget({
   assets = [],
@@ -64,6 +65,7 @@ export function PortfolioChartWidget({
   onAssetClick,
   className = '',
 }: PortfolioChartProps) {
+  const t = useTranslations();
   const [selectedAsset, setSelectedAsset] = useState<string | null>(null);
   const [chartType, setChartType] = useState<'pie' | 'history'>('pie');
 
@@ -106,184 +108,140 @@ export function PortfolioChartWidget({
     [currency]
   );
 
-  // Container animation variants
-  const containerVariants: Variants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-        delayChildren: 0.2,
-      },
-    },
-  };
-
-  const itemVariants: Variants = {
-    hidden: { opacity: 0, y: 20 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      transition: {
-        type: 'spring',
-        stiffness: 100,
-        damping: 15,
-      },
-    },
-  };
-
   return (
-    <motion.div
+    <div
       className={`w-full h-full flex flex-col gap-4 p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 ${className}`}
-      variants={containerVariants}
-      initial={showAnimation ? 'hidden' : 'visible'}
-      animate="visible"
     >
       {/* Header */}
-      <motion.div variants={itemVariants} className="flex items-center justify-between">
+      <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-            Portfolio Value
+            {t('portfolioChart.valueTitle') || 'Portfolio Value'}
           </h2>
           <p className="text-3xl font-bold text-blue-600 dark:text-blue-400 mt-1">
             {formatCurrency(totalValue)}
           </p>
         </div>
         <div className="flex gap-2">
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+          <button
             onClick={() => setChartType('pie')}
-            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-all duration-200 ${
               chartType === 'pie'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+                ? 'bg-blue-600 text-white scale-105'
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
             }`}
+            aria-pressed={chartType === 'pie'}
           >
-            Allocation
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
+            {t('portfolioChart.allocation') || 'Allocation'}
+          </button>
+          <button
             onClick={() => setChartType('history')}
-            className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+            className={`px-3 py-1 rounded-md text-sm font-medium transition-all duration-200 ${
               chartType === 'history'
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+                ? 'bg-blue-600 text-white scale-105'
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
             }`}
+            aria-pressed={chartType === 'history'}
           >
-            Trend
-          </motion.button>
+            {t('portfolioChart.trend') || 'Trend'}
+          </button>
         </div>
-      </motion.div>
+      </div>
 
       {/* Chart Container */}
-      <motion.div
-        variants={itemVariants}
-        className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-800 rounded-md min-h-[300px]"
-      >
-        <AnimatePresence mode="wait">
+      <div className="flex-1 flex items-center justify-center bg-gray-50 dark:bg-gray-800 rounded-md min-h-[300px]">
+        <div className={chartType === 'pie' ? 'w-full h-full' : 'w-full h-full p-4'}>
           {chartType === 'pie' ? (
-            <motion.div
-              key="pie-chart"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="w-full h-full flex items-center justify-center"
-            >
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                  <Pie
-                    data={pieData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={120}
-                    paddingAngle={2}
-                    isAnimationActive={showAnimation}
-                    animationDuration={800}
-                    onClick={(entry) => handleAssetClick(entry.payload.payload)}
-                  >
-                    {assetsWithColors.map((asset) => (
-                      <Cell
-                        key={`cell-${asset.id}`}
-                        fill={asset.color}
-                        className={`cursor-pointer transition-opacity ${
-                          selectedAsset === null || selectedAsset === asset.id
-                            ? 'opacity-100'
-                            : 'opacity-40'
-                        }`}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number) => formatCurrency(value as number)}
-                    contentStyle={{
-                      backgroundColor: '#1F2937',
-                      border: '1px solid #374151',
-                      borderRadius: '0.375rem',
-                      color: '#F3F4F6',
-                    }}
-                  />
-                  <Legend
-                    formatter={(value, entry) => {
-                      const asset = (entry as unknown as { payload: { payload: PortfolioAsset } }).payload.payload;
-                      return `${asset.symbol} (${asset.percentage.toFixed(1)}%)`;
-                    }}
-                    wrapperStyle={{
-                      paddingTop: '20px',
-                    }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </motion.div>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+                <Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={60}
+                  outerRadius={120}
+                  paddingAngle={2}
+                  isAnimationActive={showAnimation}
+                  animationDuration={800}
+                  onClick={(entry) => handleAssetClick(entry.payload.payload)}
+                >
+                  {assetsWithColors.map((asset) => (
+                    <Cell
+                      key={`cell-${asset.id}`}
+                      fill={asset.color}
+                      className={`cursor-pointer transition-opacity duration-300 ${
+                        selectedAsset === null || selectedAsset === asset.id
+                          ? 'opacity-100'
+                          : 'opacity-40'
+                      }`}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value: number) => formatCurrency(value as number)}
+                  contentStyle={{
+                    backgroundColor: '#1F2937',
+                    border: '1px solid #374151',
+                    borderRadius: '0.375rem',
+                    color: '#F3F4F6',
+                  }}
+                />
+                <Legend
+                  formatter={(value, entry) => {
+                    const asset = (entry as unknown as { payload: { payload: PortfolioAsset } }).payload.payload;
+                    return `${asset.symbol} (${asset.percentage.toFixed(1)}%)`;
+                  }}
+                  wrapperStyle={{
+                    paddingTop: '20px',
+                  }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
           ) : (
-            <motion.div
-              key="history-chart"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-              className="w-full h-full flex items-center justify-center p-4"
-            >
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={[]}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    stroke="#3B82F6"
-                    isAnimationActive={showAnimation}
-                    animationDuration={800}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </motion.div>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={[]}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip />
+                <Line
+                  type="monotone"
+                  dataKey="value"
+                  stroke="#3B82F6"
+                  isAnimationActive={showAnimation}
+                  animationDuration={800}
+                />
+              </LineChart>
+            </ResponsiveContainer>
           )}
-        </AnimatePresence>
-      </motion.div>
+        </div>
+      </div>
 
       {/* Asset List */}
-      <motion.div variants={itemVariants} className="space-y-2 max-h-[200px] overflow-y-auto">
+      <div className="space-y-2 max-h-[200px] overflow-y-auto">
         {assetsWithColors.map((asset) => (
-          <motion.div
+          <div
             key={asset.id}
             onClick={() => handleAssetClick(asset)}
-            className={`flex items-center gap-3 p-3 rounded-md cursor-pointer transition-all ${
+            className={`flex items-center gap-3 p-3 rounded-md cursor-pointer transition-all duration-200 ${
               selectedAsset === asset.id
                 ? 'bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700'
                 : 'bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700'
             }`}
-            whileHover={{ x: 4 }}
-            whileTap={{ scale: 0.98 }}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleAssetClick(asset);
+              }
+            }}
           >
-            <motion.div
-              className="w-3 h-3 rounded-full flex-shrink-0"
+            <div
+              className="w-3 h-3 rounded-full flex-shrink-0 transition-transform duration-200 group-hover:scale-110"
               style={{ backgroundColor: asset.color }}
-              whileHover={{ scale: 1.3 }}
             />
             <div className="flex-1 min-w-0">
               <div className="flex justify-between items-center gap-2">
@@ -303,10 +261,10 @@ export function PortfolioChartWidget({
                 </span>
               </div>
             </div>
-          </motion.div>
+          </div>
         ))}
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   );
 }
 
