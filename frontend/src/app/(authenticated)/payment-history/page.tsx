@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
+import TransactionHistoryPagination from "@/components/TransactionHistoryPagination";
 import { localeToLanguageTag } from "@/i18n/config";
 import { toast } from "sonner";
 import {
@@ -43,6 +44,7 @@ interface Payment {
 interface PaginatedResponse {
   payments: Payment[];
   total_count: number;
+  total_pages: number;
 }
 
 const LIMIT = 50;
@@ -115,6 +117,7 @@ export default function PaymentHistoryPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [selectedPayment, setSelectedPayment] = useState<string | null>(null);
   const [hoveredPayment, setHoveredPayment] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -200,6 +203,7 @@ export default function PaymentHistoryPage() {
         const data: PaginatedResponse = await response.json();
         setPayments(data.payments ?? []);
         setTotalCount(data.total_count ?? 0);
+        setTotalPages(data.total_pages ?? 0);
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") return;
         setError(err instanceof Error ? err.message : t("loadFailed"));
@@ -217,9 +221,6 @@ export default function PaymentHistoryPage() {
     setSelectedPayment(paymentId);
     setIsSheetOpen(true);
   };
-  const totalPages = Math.max(1, Math.ceil(totalCount / LIMIT));
-  const pageStart = totalCount === 0 ? 0 : (currentPage - 1) * LIMIT + 1;
-  const pageEnd = Math.min(currentPage * LIMIT, totalCount);
 
   // ── Loading state ─────────────────────────────────────────────────────────────
   if (loading) {
@@ -461,9 +462,7 @@ export default function PaymentHistoryPage() {
           {/* Results count */}
           <div className="flex items-center justify-between px-2">
             <p className="text-xs text-[#6B6B6B] font-medium">
-              {totalPages > 1
-                ? `Showing ${pageStart}-${pageEnd} of ${totalCount}`
-                : t("showingResults", { shown: payments.length, total: totalCount })}
+              {t("showingResults", { shown: payments.length, total: totalCount })}
             </p>
           </div>
 
@@ -534,31 +533,14 @@ export default function PaymentHistoryPage() {
             </div>
           )}
 
-          {totalPages > 1 && (
-            <div className="flex flex-col items-center justify-between gap-3 border-t border-[#F0F0F0] py-6 sm:flex-row">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-[#A0A0A0]">
-                Page {currentPage} of {totalPages}
-              </p>
-              <nav className="flex items-center gap-2" aria-label="Transaction history pagination">
-                <button
-                  type="button"
-                  onClick={() => handlePageChange(currentPage - 1)}
-                  disabled={currentPage <= 1 || isFilterPending}
-                  className="inline-flex min-h-10 items-center rounded-xl border border-[#E8E8E8] bg-white px-4 text-[10px] font-bold uppercase tracking-widest text-[#0A0A0A] transition-all hover:bg-[#F5F5F5] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handlePageChange(currentPage + 1)}
-                  disabled={currentPage >= totalPages || isFilterPending}
-                  className="inline-flex min-h-10 items-center rounded-xl bg-[#0A0A0A] px-4 text-[10px] font-bold uppercase tracking-widest text-white transition-all hover:bg-[#2A2A2A] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Next
-                </button>
-              </nav>
-            </div>
-          )}
+          <TransactionHistoryPagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalCount={totalCount}
+            limit={LIMIT}
+            onPageChange={handlePageChange}
+            disabled={loading || isFilterPending}
+          />
         </div>
       </div>
 

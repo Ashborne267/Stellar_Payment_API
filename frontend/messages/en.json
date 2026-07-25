@@ -1,4 +1,29 @@
 {
+  "twoFactorAuth": {
+    "ariaLabel": "Two-factor authentication setup",
+    "stepsLabel": "Setup steps",
+    "title": "Enable Two-Factor Authentication",
+    "description": "Protect your account with an authenticator app. You will need to scan a QR code to get started.",
+    "enableButton": "Enable 2FA",
+    "settingUp": "Setting up…",
+    "scanTitle": "Scan with your authenticator app",
+    "scanDescription": "Use Google Authenticator, Authy, or any TOTP-compatible app to scan the code below.",
+    "qrCodeAlt": "TOTP QR code — scan with your authenticator app",
+    "qrCodeSkeletonLabel": "Generating QR code…",
+    "manualKeyLabel": "Or enter key manually",
+    "manualKeyAria": "Manual setup key: {key}",
+    "codeInputLabel": "Enter 6-digit code",
+    "codeInputPlaceholder": "000000",
+    "verifyButton": "Verify & Enable",
+    "verifying": "Verifying…",
+    "successTitle": "Two-Factor Authentication Enabled",
+    "successDescription": "Your account is now protected. You will be prompted for a code on each login.",
+    "error": {
+      "setupFailed": "Failed to start 2FA setup. Please try again.",
+      "invalidCode": "Invalid code. Please try again.",
+      "codeLength": "Please enter the 6-digit code from your authenticator app."
+    }
+  },
   "localeSwitcher": {
     "label": "Lang",
     "ariaLabel": "Select language",
@@ -57,6 +82,21 @@
     "development": "Development",
     "apiKeysTip": "Use the API Keys page to rotate your secret token periodically.",
     "webhookLogsTip": "Check Webhook Logs status if payments are not triggering your backend."
+  },
+  "realTimeBalanceSync": {
+    "title": "Real-time Balances",
+    "refreshButton": "Refresh",
+    "syncing": "Syncing…",
+    "sectionAriaLabel": "Real-time balance information",
+    "balancesListAriaLabel": "Account balances",
+    "emptyState": "No balances available.",
+    "updatedLabel": "Updated",
+    "balanceItemAriaLabel": "{asset} balance: {balance}",
+    "liveRegion": {
+      "syncing": "Syncing balances…",
+      "error": "Balance sync error: {error}",
+      "updatedAt": "Balances updated at {time}."
+    }
   },
   "createPaymentPage": {
     "eyebrow": "Dashboard",
@@ -214,6 +254,15 @@
       "confirmed": "Confirmed",
       "failed": "Failed",
       "refunded": "Refunded"
+    },
+    "pagination": {
+      "ariaLabel": "Payment history pagination",
+      "previous": "Previous page",
+      "next": "Next page",
+      "goToPage": "Go to page {page}",
+      "currentPage": "Current page, page {page}",
+      "pageLabel": "Page {page} of {totalPages}",
+      "range": "Showing {start}-{end} of {total}"
     }
   },
   "walletSelector": {
@@ -343,6 +392,7 @@
     "eyebrowAccount": "Account",
     "title": "Settings",
     "description": "Manage your credentials, branding, and integrations.",
+    "loadingSettings": "Loading settings…",
     "noApiKeyTitle": "No API key found",
     "noApiKeyDescription": "Register a merchant account first to manage your credentials here.",
     "registerAsMerchant": "Register as Merchant",
@@ -415,7 +465,30 @@
     "regenerateSecretEllipsis": "Regenerate Secret…",
     "regenerateSecretWarning": "The current secret will stop working immediately.",
     "regenerating": "Regenerating…",
-    "dangerZoneDescription": "Irreversible actions. Proceed with caution."
+    "dangerZoneDescription": "Irreversible actions. Proceed with caution.",
+    "failedToLoadBranding": "Failed to load branding",
+    "failedToLoadWebhookSettings": "Failed to load webhook settings",
+    "failedToRotateKey": "Failed to rotate key",
+    "apiKeyRotatedSuccess": "API key rotated — update any integrations using the old key.",
+    "imageSizeLimit": "Image must be under 2MB",
+    "logoUploaded": "Logo uploaded!",
+    "hexColorRequired": "{field} must be a valid hex color",
+    "failedToSaveBranding": "Failed to save branding",
+    "brandingSaved": "Branding saved",
+    "webhookUrlMustBeHttps": "Webhook URL must use HTTPS",
+    "webhookUrlInvalid": "Invalid URL (e.g. https://example.com/webhook)",
+    "failedToSaveWebhookUrl": "Failed to save webhook URL",
+    "webhookUrlSaved": "Webhook URL saved",
+    "webhookUrlCleared": "Webhook URL cleared",
+    "failedToVerifyDomain": "Failed to verify webhook domain",
+    "domainVerified": "Domain verified",
+    "domainStillUnverified": "Domain still unverified",
+    "failedToRegenerateSecret": "Failed to regenerate secret",
+    "webhookSecretRegenerated": "Webhook secret regenerated — update your integrations.",
+    "testWebhookRequestFailed": "Test webhook request failed",
+    "failedToTestWebhook": "Failed to test webhook",
+    "testWebhookSentStatus": "Test webhook sent — status {status}",
+    "colorPickerLabel": "{label} color picker"
   },
   "notificationCenter": {
     "buttonLabel": "Notifications",
@@ -429,18 +502,76 @@
     "notificationLabel": "Notification: {message}",
     "timestampLabel": "Timestamp: {timestamp}"
   },
-  "permissions": {
-    "manager": "User Permissions",
-    "loading": "Loading permissions…",
-    "readOnlyNotice": "You have read-only access. Contact an administrator to change permissions.",
-    "updateSuccess": "Permission updated",
-    "updateError": "Failed to update permission",
-    "updating": "Updating permission…",
-    "category": {
-      "payment": "Payments",
-      "webhook": "Webhooks",
-      "analytics": "Analytics",
-      "admin": "Administration"
-    }
+  "fiatOnramp": {
+    "title": "Buy / Deposit Funds",
+    "triggerLabel": "Buy / Deposit",
+    "description": "Deposit fiat via a Stellar anchor (SEP-0024). Funds arrive as tokens directly in your connected wallet.",
+    "selectAsset": "Select Asset",
+    "amountLabel": "Amount",
+    "amountOptional": "(optional)",
+    "amountPlaceholder": "e.g. {amount} {asset}",
+    "anchorDomainLabel": "Anchor Domain",
+    "anchorDomainPlaceholder": "e.g. testanchor.stellar.org",
+    "continueButton": "Continue to Anchor",
+    "footerNote": "Secured by Stellar Network - SEP-0024 Standard",
+    "stepConnecting": "Connecting to anchor...",
+    "stepAuth": "Waiting for wallet signature...",
+    "stepGenerating": "Preparing your deposit form...",
+    "authHint": "Please sign the challenge transaction in your wallet to securely connect to {domain}.",
+    "genericHint": "This should only take a moment.",
+    "iframeTitle": "Anchor deposit form",
+    "genericError": "Deposit failed"
+  },
+  "kycPage": {
+    "title": "KYC Verification",
+    "description": "Complete the verification process to comply with regulatory requirements and unlock full access to platform features.",
+    "whyKyc": "Why KYC?",
+    "reasonComply": "Comply with regulatory requirements",
+    "reasonLimits": "Increase transaction limits",
+    "reasonFeatures": "Access premium features",
+    "reasonSecurity": "Enhanced account security"
+  },
+  "kycForm": {
+    "formTitle": "KYC Submission Form",
+    "step": "Step",
+    "of": "of",
+    "steps": "Steps",
+    "completed": "completed",
+    "current": "current",
+    "upcoming": "upcoming",
+    "personalInfo": "Personal Information",
+    "addressInfo": "Address Information",
+    "documents": "Documents",
+    "review": "Review",
+    "firstName": "First Name",
+    "lastName": "Last Name",
+    "email": "Email",
+    "nationality": "Nationality",
+    "dateOfBirth": "Date of Birth",
+    "street": "Street",
+    "city": "City",
+    "state": "State",
+    "postalCode": "Postal Code",
+    "country": "Country",
+    "idType": "ID Type",
+    "selectIdType": "Select ID type",
+    "passport": "Passport",
+    "driversLicense": "Driver's License",
+    "nationalId": "National ID",
+    "idNumber": "ID Number",
+    "idFront": "ID Front",
+    "idBack": "ID Back",
+    "selfie": "Selfie",
+    "required": "Required",
+    "validationError": "Please fill in all required fields",
+    "back": "Back",
+    "next": "Next",
+    "submit": "Submit KYC",
+    "submitting": "Submitting...",
+    "submitError": "Submission failed",
+    "submitAnother": "Submit Another",
+    "successTitle": "KYC Submitted Successfully!",
+    "successDescription": "Your KYC verification has been submitted and is under review.",
+    "dash": "—"
   }
 }

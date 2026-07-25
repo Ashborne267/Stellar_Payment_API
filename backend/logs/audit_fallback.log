@@ -27,3 +27,10 @@
 2026-06-28T08:03:05.982Z | {"merchant_id":"merchant-uuid-005","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
 2026-06-28T08:03:05.984Z | {"merchant_id":"merchant-uuid-004","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
 2026-06-28T08:03:06.289Z | {"merchant_id":"merchant-uuid-006","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.295Z | {"merchant_id":"merchant-uuid-001","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.324Z | {"merchant_id":"merchant-uuid-002","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.327Z | {"merchant_id":null,"action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.329Z | {"merchant_id":"merchant-uuid-003","action":"login","status":"success","ip_address":null,"user_agent":null,"event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.331Z | {"merchant_id":"merchant-uuid-005","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.351Z | {"merchant_id":"merchant-uuid-004","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined
+2026-07-24T15:08:33.654Z | {"merchant_id":"merchant-uuid-006","action":"login","event_type":"login_attempt"} | error: optimizedWrite is not defined

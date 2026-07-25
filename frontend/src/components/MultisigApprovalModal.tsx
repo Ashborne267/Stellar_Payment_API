@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
 import { useMultisigState, useMultisigActions } from "@/lib/multisig-context";
 import { toast } from "sonner";
-import { CopyButton } from "@/components/CopyButton";
+import CopyButton from "@/components/CopyButton";
 import {
   errorMessageVariants,
 } from "@/lib/network-animations";
@@ -15,7 +15,7 @@ const backdropVariants = {
   exit: { opacity: 0, transition: { duration: 0.3 } },
 };
 
-const modalVariants = {
+const modalVariants: Variants = {
   hidden: { scale: 0.85, opacity: 0, y: 30 },
   visible: {
     scale: 1,

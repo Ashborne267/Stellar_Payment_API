@@ -3,6 +3,36 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { RealTimeBalanceSync } from "./RealTimeBalanceSync";
 
+vi.mock("next-intl", () => {
+  const translations: Record<string, string> = {
+    "realTimeBalanceSync.title": "Real-time Balances",
+    "realTimeBalanceSync.refreshButton": "Refresh",
+    "realTimeBalanceSync.syncing": "Syncing…",
+    "realTimeBalanceSync.sectionAriaLabel": "Real-time balance information",
+    "realTimeBalanceSync.balancesListAriaLabel": "Account balances",
+    "realTimeBalanceSync.emptyState": "No balances available.",
+    "realTimeBalanceSync.updatedLabel": "Updated",
+    "realTimeBalanceSync.balanceItemAriaLabel": "{asset} balance: {balance}",
+    "realTimeBalanceSync.liveRegion.syncing": "Syncing balances…",
+    "realTimeBalanceSync.liveRegion.error": "Balance sync error: {error}",
+    "realTimeBalanceSync.liveRegion.updatedAt": "Balances updated at {time}.",
+  };
+
+  return {
+    __esModule: true,
+    useTranslations: (namespace: string) => (key: string, params?: Record<string, string>) => {
+      const template = translations[`${namespace}.${key}`] ?? key;
+      if (!params) return template;
+      return Object.entries(params).reduce(
+        (result, [paramKey, paramValue]) =>
+          result.replace(`{${paramKey}}`, String(paramValue)),
+        template,
+      );
+    },
+    useLocale: () => "en",
+  };
+});
+
 vi.mock("framer-motion", async () => {
   const actual = await vi.importActual("framer-motion");
   return {
@@ -32,12 +62,9 @@ const mockBalances = [
 ];
 
 describe("RealTimeBalanceSync", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("renders heading and refresh button", () => {
@@ -123,7 +150,10 @@ describe("RealTimeBalanceSync", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/updated/i)).toBeInTheDocument();
+      expect(screen.getByText("Updated")).toBeInTheDocument();
+      expect(
+        screen.getByText(/\d{1,2}:\d{2} (AM|PM)/, { selector: "time" }),
+      ).toBeInTheDocument();
     });
   });
 

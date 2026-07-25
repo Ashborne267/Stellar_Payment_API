@@ -1,4 +1,29 @@
 {
+  "twoFactorAuth": {
+    "ariaLabel": "Configuracao de autenticacao em duas etapas",
+    "stepsLabel": "Etapas de configuracao",
+    "title": "Ativar autenticacao em duas etapas",
+    "description": "Proteja sua conta com um aplicativo de autenticacao. Voce precisara escanear um codigo QR para comecar.",
+    "enableButton": "Ativar 2FA",
+    "settingUp": "Configurando…",
+    "scanTitle": "Escaneie com seu aplicativo de autenticacao",
+    "scanDescription": "Use Google Authenticator, Authy ou qualquer aplicativo compativel com TOTP para escanear o codigo.",
+    "qrCodeAlt": "Codigo QR TOTP — escaneie com seu aplicativo de autenticacao",
+    "qrCodeSkeletonLabel": "Gerando codigo QR…",
+    "manualKeyLabel": "Ou insira a chave manualmente",
+    "manualKeyAria": "Chave de configuracao manual: {key}",
+    "codeInputLabel": "Insira o codigo de 6 digitos",
+    "codeInputPlaceholder": "000000",
+    "verifyButton": "Verificar e ativar",
+    "verifying": "Verificando…",
+    "successTitle": "Autenticacao em duas etapas ativada",
+    "successDescription": "Sua conta esta agora protegida. Voce sera solicitado um codigo em cada login.",
+    "error": {
+      "setupFailed": "Falha ao iniciar a configuracao de 2FA. Tente novamente.",
+      "invalidCode": "Codigo invalido. Tente novamente.",
+      "codeLength": "Insira o codigo de 6 digitos do seu aplicativo de autenticacao."
+    }
+  },
   "localeSwitcher": {
     "label": "Idioma",
     "ariaLabel": "Selecionar idioma",
@@ -57,6 +82,21 @@
     "development": "Desenvolvimento",
     "apiKeysTip": "Use a pagina de Chaves API para rotacionar seu token secreto periodicamente.",
     "webhookLogsTip": "Confira os Logs de Webhook se os pagamentos nao estiverem acionando seu backend."
+  },
+  "realTimeBalanceSync": {
+    "title": "Saldos em tempo real",
+    "refreshButton": "Atualizar",
+    "syncing": "Sincronizando…",
+    "sectionAriaLabel": "Informacoes de saldo em tempo real",
+    "balancesListAriaLabel": "Saldos da conta",
+    "emptyState": "Nenhum saldo disponivel.",
+    "updatedLabel": "Atualizado",
+    "balanceItemAriaLabel": "{asset} saldo: {balance}",
+    "liveRegion": {
+      "syncing": "Sincronizando saldos…",
+      "error": "Erro de sincronizacao de saldos: {error}",
+      "updatedAt": "Saldos atualizados as {time}."
+    }
   },
   "createPaymentPage": {
     "eyebrow": "Painel",
@@ -214,6 +254,15 @@
       "confirmed": "Confirmado",
       "failed": "Falhou",
       "refunded": "Reembolsado"
+    },
+    "pagination": {
+      "ariaLabel": "Paginação do histórico de pagamentos",
+      "previous": "Página anterior",
+      "next": "Próxima página",
+      "goToPage": "Ir para a página {page}",
+      "currentPage": "Página atual, página {page}",
+      "pageLabel": "Página {page} de {totalPages}",
+      "range": "Mostrando {start}-{end} de {total}"
     }
   },
   "walletSelector": {
@@ -343,6 +392,7 @@
     "eyebrowAccount": "Conta",
     "title": "Configuracoes",
     "description": "Gerencie suas credenciais, marca e integracoes.",
+    "loadingSettings": "Carregando configuracoes…",
     "noApiKeyTitle": "Nenhuma chave de API encontrada",
     "noApiKeyDescription": "Registre uma conta de lojista primeiro para gerenciar suas credenciais aqui.",
     "registerAsMerchant": "Registrar como Lojista",
@@ -415,7 +465,30 @@
     "regenerateSecretEllipsis": "Regenerar Segredo…",
     "regenerateSecretWarning": "O segredo atual deixara de funcionar imediatamente.",
     "regenerating": "Regenerando…",
-    "dangerZoneDescription": "Acoes irreversiveis. Prossiga com cautela."
+    "dangerZoneDescription": "Acoes irreversiveis. Prossiga com cautela.",
+    "failedToLoadBranding": "Falha ao carregar a marca",
+    "failedToLoadWebhookSettings": "Falha ao carregar as configuracoes do webhook",
+    "failedToRotateKey": "Falha ao rotacionar a chave",
+    "apiKeyRotatedSuccess": "Chave de API rotacionada — atualize as integracoes que usam a chave antiga.",
+    "imageSizeLimit": "A imagem deve ter menos de 2MB",
+    "logoUploaded": "Logo enviado!",
+    "hexColorRequired": "{field} deve ser uma cor hexadecimal valida",
+    "failedToSaveBranding": "Falha ao salvar a marca",
+    "brandingSaved": "Marca salva",
+    "webhookUrlMustBeHttps": "A URL do webhook deve usar HTTPS",
+    "webhookUrlInvalid": "URL invalida (ex. https://example.com/webhook)",
+    "failedToSaveWebhookUrl": "Falha ao salvar a URL do webhook",
+    "webhookUrlSaved": "URL do webhook salva",
+    "webhookUrlCleared": "URL do webhook removida",
+    "failedToVerifyDomain": "Falha ao verificar o dominio do webhook",
+    "domainVerified": "Dominio verificado",
+    "domainStillUnverified": "Dominio ainda nao verificado",
+    "failedToRegenerateSecret": "Falha ao regenerar o segredo",
+    "webhookSecretRegenerated": "Segredo do webhook regenerado — atualize suas integracoes.",
+    "testWebhookRequestFailed": "Falha na solicitacao de teste do webhook",
+    "failedToTestWebhook": "Falha ao testar o webhook",
+    "testWebhookSentStatus": "Webhook de teste enviado — status {status}",
+    "colorPickerLabel": "Seletor de cor {label}"
   },
   "notificationCenter": {
     "buttonLabel": "Notificacoes",
@@ -429,18 +502,76 @@
     "notificationLabel": "Notificacao: {message}",
     "timestampLabel": "Carimbo de data/hora: {timestamp}"
   },
-  "permissions": {
-    "manager": "Permissoes do Usuario",
-    "loading": "Carregando permissoes…",
-    "readOnlyNotice": "Voce tem acesso somente leitura. Contate um administrador para alterar as permissoes.",
-    "updateSuccess": "Permissao atualizada",
-    "updateError": "Falha ao atualizar a permissao",
-    "updating": "Atualizando permissao…",
-    "category": {
-      "payment": "Pagamentos",
-      "webhook": "Webhooks",
-      "analytics": "Analise",
-      "admin": "Administracao"
-    }
+  "fiatOnramp": {
+    "title": "Comprar / Depositar Fundos",
+    "triggerLabel": "Comprar / Depositar",
+    "description": "Deposite fiat atraves de um anchor Stellar (SEP-0024). Os fundos chegam como tokens diretamente na sua carteira conectada.",
+    "selectAsset": "Selecionar Ativo",
+    "amountLabel": "Valor",
+    "amountOptional": "(opcional)",
+    "amountPlaceholder": "ex. {amount} {asset}",
+    "anchorDomainLabel": "Dominio do Anchor",
+    "anchorDomainPlaceholder": "ex. testanchor.stellar.org",
+    "continueButton": "Continuar para o Anchor",
+    "footerNote": "Protegido pela rede Stellar - Padrao SEP-0024",
+    "stepConnecting": "Conectando ao anchor...",
+    "stepAuth": "Aguardando assinatura da carteira...",
+    "stepGenerating": "Preparando seu formulario de deposito...",
+    "authHint": "Assine a transacao de desafio na sua carteira para se conectar com seguranca a {domain}.",
+    "genericHint": "Isso deve levar apenas um momento.",
+    "iframeTitle": "Formulario de deposito do anchor",
+    "genericError": "Falha no deposito"
+  },
+  "kycPage": {
+    "title": "Verificacao KYC",
+    "description": "Complete o processo de verificacao para atender aos requisitos regulatorios e desbloquear o acesso completo aos recursos da plataforma.",
+    "whyKyc": "Por que KYC?",
+    "reasonComply": "Atender aos requisitos regulatorios",
+    "reasonLimits": "Aumentar os limites de transacao",
+    "reasonFeatures": "Acessar recursos premium",
+    "reasonSecurity": "Seguranca aprimorada da conta"
+  },
+  "kycForm": {
+    "formTitle": "Formulario de envio KYC",
+    "step": "Passo",
+    "of": "de",
+    "steps": "Passos",
+    "completed": "concluido",
+    "current": "atual",
+    "upcoming": "proximo",
+    "personalInfo": "Informacoes Pessoais",
+    "addressInfo": "Informacoes de Endereco",
+    "documents": "Documentos",
+    "review": "Revisar",
+    "firstName": "Nome",
+    "lastName": "Sobrenome",
+    "email": "E-mail",
+    "nationality": "Nacionalidade",
+    "dateOfBirth": "Data de nascimento",
+    "street": "Rua",
+    "city": "Cidade",
+    "state": "Estado",
+    "postalCode": "Codigo postal",
+    "country": "Pais",
+    "idType": "Tipo de ID",
+    "selectIdType": "Selecionar tipo de ID",
+    "passport": "Passaporte",
+    "driversLicense": "Carteira de motorista",
+    "nationalId": "ID Nacional",
+    "idNumber": "Numero do ID",
+    "idFront": "Frente do ID",
+    "idBack": "Verso do ID",
+    "selfie": "Foto selfie",
+    "required": "Obrigatorio",
+    "validationError": "Por favor preencha todos os campos obrigatorios",
+    "back": "Voltar",
+    "next": "Proximo",
+    "submit": "Enviar KYC",
+    "submitting": "Enviando...",
+    "submitError": "Falha no envio",
+    "submitAnother": "Enviar outro",
+    "successTitle": "KYC enviado com sucesso!",
+    "successDescription": "Sua verificacao KYC foi enviada e esta em revisao.",
+    "dash": "—"
   }
 }

@@ -12,6 +12,44 @@ vi.mock("./ui/Spinner", () => ({
   ),
 }));
 
+vi.mock("next-intl", () => ({
+  useTranslations: () => {
+    const translations: Record<string, string> = {
+      "ariaLabel": "Two-factor authentication setup",
+      "stepsLabel": "Setup steps",
+      "title": "Enable Two-Factor Authentication",
+      "description": "Protect your account with an authenticator app. You will need to scan a QR code to get started.",
+      "enableButton": "Enable 2FA",
+      "settingUp": "Setting up…",
+      "scanTitle": "Scan with your authenticator app",
+      "scanDescription": "Use Google Authenticator, Authy, or any TOTP-compatible app to scan the code below.",
+      "qrCodeAlt": "TOTP QR code — scan with your authenticator app",
+      "qrCodeSkeletonLabel": "Generating QR code…",
+      "manualKeyLabel": "Or enter key manually",
+      "codeInputLabel": "Enter 6-digit code",
+      "codeInputPlaceholder": "000000",
+      "verifyButton": "Verify & Enable",
+      "verifying": "Verifying…",
+      "successTitle": "Two-Factor Authentication Enabled",
+      "successDescription": "Your account is now protected. You will be prompted for a code on each login.",
+      "error.setupFailed": "Failed to start 2FA setup. Please try again.",
+      "error.invalidCode": "Invalid code. Please try again.",
+      "error.codeLength": "Please enter the 6-digit code from your authenticator app.",
+    };
+
+    return (key: string, params?: Record<string, string>) => {
+      const value = translations[key] || key;
+      if (params) {
+        return Object.entries(params).reduce(
+          (acc, [k, v]) => acc.replace(`{${k}}`, v),
+          value
+        );
+      }
+      return value;
+    };
+  },
+}));
+
 const SUCCESS_RESULT = {
   qrDataUrl: "data:image/png;base64,mock-qr",
   manualKey: "JBSWY3DPEHPK3PXP",
