@@ -83,6 +83,21 @@
     "apiKeysTip": "Use a pagina de Chaves API para rotacionar seu token secreto periodicamente.",
     "webhookLogsTip": "Confira os Logs de Webhook se os pagamentos nao estiverem acionando seu backend."
   },
+  "realTimeBalanceSync": {
+    "title": "Saldos em tempo real",
+    "refreshButton": "Atualizar",
+    "syncing": "Sincronizando…",
+    "sectionAriaLabel": "Informacoes de saldo em tempo real",
+    "balancesListAriaLabel": "Saldos da conta",
+    "emptyState": "Nenhum saldo disponivel.",
+    "updatedLabel": "Atualizado",
+    "balanceItemAriaLabel": "{asset} saldo: {balance}",
+    "liveRegion": {
+      "syncing": "Sincronizando saldos…",
+      "error": "Erro de sincronizacao de saldos: {error}",
+      "updatedAt": "Saldos atualizados as {time}."
+    }
+  },
   "createPaymentPage": {
     "eyebrow": "Painel",
     "title": "Criar link de pagamento",
