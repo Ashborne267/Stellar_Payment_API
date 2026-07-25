@@ -1,7 +1,9 @@
 "use client";
 
 import React, { useId } from "react";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
+import FilterSyncIndicator from "./FilterSyncIndicator";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -61,7 +63,7 @@ const filterItemVariants: Variants = {
 
 // ─── Small reusable pieces ───────────────────────────────────────────────────
 
-/** Spinning ring shown while a filter is syncing to the URL. */
+/** Enhanced spinning ring with visual feedback while a filter is syncing to the URL. */
 function SyncSpinner({ label = "Syncing…" }: { label?: string }) {
   return (
     <span
@@ -69,32 +71,38 @@ function SyncSpinner({ label = "Syncing…" }: { label?: string }) {
       aria-label={label}
       className="inline-flex items-center gap-1 text-[10px] font-semibold text-[var(--pluto-500)]"
     >
-      <svg
-        className="h-3 w-3 animate-spin"
-        viewBox="0 0 24 24"
-        fill="none"
-        aria-hidden="true"
+      <motion.div
+        animate={{ rotate: 360 }}
+        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+        className="inline-flex"
       >
-        <circle
-          className="opacity-25"
-          cx="12"
-          cy="12"
-          r="10"
-          stroke="currentColor"
-          strokeWidth="4"
-        />
-        <path
-          className="opacity-75"
-          fill="currentColor"
-          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-        />
-      </svg>
+        <svg
+          className="h-3 w-3"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle
+            className="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            strokeWidth="4"
+          />
+          <path
+            className="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+          />
+        </svg>
+      </motion.div>
       <span className="sr-only">{label}</span>
     </span>
   );
 }
 
-/** Animated dot badge shown in the header when any filter is pending. */
+/** Enhanced animated dot badge shown in the header when any filter is pending. */
 function PendingBadge({ visible }: { visible: boolean }) {
   return (
     <AnimatePresence>
@@ -106,10 +114,14 @@ function PendingBadge({ visible }: { visible: boolean }) {
           exit={{ opacity: 0, scale: 0.6 }}
           transition={{ duration: 0.15 }}
           aria-hidden="true"
-          className="ml-2 inline-flex items-center gap-1 rounded-full bg-[var(--pluto-50,#f0f4ff)] px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[var(--pluto-500)]"
+          className="ml-2 inline-flex items-center gap-1 rounded-full bg-[var(--pluto-50,#f0f4ff)] px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-[var(--pluto-500)] ring-1 ring-[var(--pluto-200)] shadow-sm"
         >
           <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--pluto-400)] opacity-75" />
+            <motion.span
+              animate={{ scale: [1, 1.2, 1] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+              className="absolute inline-flex h-full w-full rounded-full bg-[var(--pluto-400)] opacity-75"
+            />
             <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-[var(--pluto-500)]" />
           </span>
           Applying
@@ -162,6 +174,7 @@ interface FilterContentProps {
   isMobile: boolean;
   uid: string;
   onClose?: () => void;
+  t: ReturnType<typeof useTranslations>;
 }
 
 /**
@@ -182,6 +195,7 @@ function FilterContent({
   isMobile,
   uid,
   onClose,
+  t,
 }: FilterContentProps) {
   const suffix = isMobile ? `-${uid}-mobile` : `-${uid}-desktop`;
 
@@ -193,7 +207,7 @@ function FilterContent({
       {/* ── Header ── */}
       <div className="mb-8 flex items-center justify-between">
         <div className="flex items-center">
-          <h2 className="text-xl font-bold text-[#0A0A0A]">Filters</h2>
+          <h2 className="text-xl font-bold text-[#0A0A0A]">{t("title")}</h2>
           {/* Animated active-filter count badge */}
           <AnimatePresence mode="wait">
             {activeFilterCount > 0 && (
@@ -227,7 +241,7 @@ function FilterContent({
           <button
             onClick={onClose}
             className="rounded-full p-2 hover:bg-[#F5F5F5] transition-colors lg:hidden"
-            aria-label="Close filters"
+            aria-label={t("closeFilters")}
           >
             <svg
               className="h-5 w-5 text-[#6B6B6B]"
@@ -255,13 +269,16 @@ function FilterContent({
         animate="visible"
       >
         {/* Search */}
-        <motion.div variants={filterItemVariants} className="flex flex-col gap-2">
+        <motion.div
+          variants={filterItemVariants}
+          className="flex flex-col gap-2"
+        >
           <div className="flex items-center justify-between">
             <label
               htmlFor={`sidebar-search${suffix}`}
               className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]"
             >
-              Search
+              {t("search.label")}
             </label>
             <AnimatePresence>
               {searchSyncPending && (
@@ -272,7 +289,7 @@ function FilterContent({
                   exit={{ opacity: 0, x: 4 }}
                   transition={{ duration: 0.15 }}
                 >
-                  <SyncSpinner label="Applying search to results" />
+                  <SyncSpinner label={t("search.syncLabel")} />
                 </motion.span>
               )}
             </AnimatePresence>
@@ -286,11 +303,9 @@ function FilterContent({
               onChange={(e) => onFilterChange("search", e.target.value)}
               aria-busy={searchSyncPending}
               aria-describedby={
-                searchSyncPending
-                  ? `sidebar-search-hint${suffix}`
-                  : undefined
+                searchSyncPending ? `sidebar-search-hint${suffix}` : undefined
               }
-              placeholder="ID or description…"
+              placeholder={t("search.placeholder")}
               className={[
                 "w-full rounded-xl border bg-[#F9F9F9] py-2.5 pl-10 pr-9 text-sm text-[#0A0A0A]",
                 "placeholder:text-[#6B6B6B] focus:bg-white focus:outline-none transition-all duration-200",
@@ -327,7 +342,7 @@ function FilterContent({
                   transition={{ duration: 0.12 }}
                   type="button"
                   onClick={() => onClearFilter("search")}
-                  aria-label="Clear search"
+                  aria-label={t("ariaLabel")}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-0.5 text-[#A0A0A0] hover:bg-[#F0F0F0] hover:text-[#0A0A0A] transition-colors"
                 >
                   <svg
@@ -356,19 +371,22 @@ function FilterContent({
               className="text-[10px] text-[var(--pluto-500)] font-medium"
               aria-live="polite"
             >
-              Applying to results…
+              {t("applyingToResults")}
             </p>
           )}
         </motion.div>
 
         {/* Status */}
-        <motion.div variants={filterItemVariants} className="flex flex-col gap-2">
+        <motion.div
+          variants={filterItemVariants}
+          className="flex flex-col gap-2"
+        >
           <div className="flex items-center justify-between">
             <label
               htmlFor={`sidebar-status${suffix}`}
               className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]"
             >
-              Status
+              {t("status.label")}
             </label>
             <AnimatePresence>
               {isFilterPending && filters.status !== "all" && (
@@ -380,7 +398,7 @@ function FilterContent({
                   transition={{ duration: 0.15 }}
                   aria-hidden="true"
                 >
-                  <SyncSpinner label="Applying status filter" />
+                  <SyncSpinner label={t("status.syncLabel")} />
                 </motion.span>
               )}
             </AnimatePresence>
@@ -402,9 +420,7 @@ function FilterContent({
             >
               {STATUS_OPTIONS.map((s) => (
                 <option key={s} value={s}>
-                  {s === "all"
-                    ? "All Statuses"
-                    : s.charAt(0).toUpperCase() + s.slice(1)}
+                  {s === "all" ? t("status.all") : t(`status.${s}` as any)}
                 </option>
               ))}
             </select>
@@ -428,11 +444,18 @@ function FilterContent({
         </motion.div>
 
         {/* Asset */}
-        <motion.div variants={filterItemVariants} className="flex flex-col gap-2">
+        <motion.div
+          variants={filterItemVariants}
+          className="flex flex-col gap-2"
+        >
           <p className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-            Asset
+            {t("asset.label")}
           </p>
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Asset filter">
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label={t("asset.label")}
+          >
             {ASSET_OPTIONS.map((a) => {
               const isActive = filters.asset === a;
               return (
@@ -452,10 +475,10 @@ function FilterContent({
                     isFilterPending && isActive ? "opacity-70" : "",
                   ].join(" ")}
                 >
-                  {a === "all" ? "All" : a}
+                  {a === "all" ? t("asset.all") : a}
                   {isFilterPending && isActive && (
                     <span className="ml-1.5 inline-block" aria-hidden="true">
-                      <SyncSpinner />
+                      <SyncSpinner label={t("asset.syncLabel")} />
                     </span>
                   )}
                 </motion.button>
@@ -470,7 +493,7 @@ function FilterContent({
           className="mt-2 flex flex-col gap-4 border-t border-[#F0F0F0] pt-4"
         >
           <p className="text-[10px] font-bold uppercase tracking-widest text-[#6B6B6B]">
-            Date Range
+            {t("dateRange.label")}
           </p>
           <div className="flex flex-col gap-3">
             {/* From */}
@@ -480,7 +503,7 @@ function FilterContent({
                   htmlFor={`sidebar-date-from${suffix}`}
                   className="text-[10px] font-medium text-[#A0A0A0]"
                 >
-                  From
+                  {t("dateRange.from")}
                 </label>
                 <AnimatePresence>
                   {isFilterPending && filters.dateFrom && (
@@ -490,7 +513,7 @@ function FilterContent({
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                     >
-                      <SyncSpinner label="Applying date from" />
+                      <SyncSpinner label={t("dateRange.fromSyncLabel")} />
                     </motion.span>
                   )}
                 </AnimatePresence>
@@ -518,7 +541,7 @@ function FilterContent({
                   htmlFor={`sidebar-date-to${suffix}`}
                   className="text-[10px] font-medium text-[#A0A0A0]"
                 >
-                  To
+                  {t("dateRange.to")}
                 </label>
                 <AnimatePresence>
                   {isFilterPending && filters.dateTo && (
@@ -528,7 +551,7 @@ function FilterContent({
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                     >
-                      <SyncSpinner label="Applying date to" />
+                      <SyncSpinner label={t("dateRange.toSyncLabel")} />
                     </motion.span>
                   )}
                 </AnimatePresence>
@@ -562,8 +585,8 @@ function FilterContent({
           whileTap={hasActiveFilters ? { scale: 0.97 } : undefined}
           aria-label={
             activeFilterCount > 0
-              ? `Clear all ${activeFilterCount} active filter${activeFilterCount === 1 ? "" : "s"}`
-              : "Clear all filters"
+              ? t("clearAllAriaLabel", { count: activeFilterCount })
+              : t("clearAll")
           }
           className={[
             "w-full rounded-xl py-3 text-[10px] font-bold uppercase tracking-widest transition-all duration-200",
@@ -573,11 +596,11 @@ function FilterContent({
         >
           {anyPending ? (
             <span className="flex items-center justify-center gap-2">
-              <SyncSpinner label="Clearing filters" />
-              Clearing…
+              <SyncSpinner label={t("clearing")} />
+              {t("clearing")}
             </span>
           ) : (
-            "Clear All Filters"
+            t("clearAll")
           )}
         </motion.button>
       </div>
@@ -598,6 +621,9 @@ export default function TransactionFilterSidebar({
   isOpen = false,
   onClose,
 }: TransactionFilterSidebarProps) {
+  // i18n translations for transaction filters
+  const t = useTranslations("transactionFilters");
+
   // Stable IDs for desktop vs mobile duplicate inputs (avoids duplicate-id a11y violations)
   const uid = useId();
   const anyPending = searchSyncPending || isFilterPending;
@@ -622,6 +648,7 @@ export default function TransactionFilterSidebar({
     activeFilterCount,
     uid,
     onClose,
+    t,
   };
 
   return (
@@ -630,7 +657,7 @@ export default function TransactionFilterSidebar({
       <div
         className="hidden lg:block w-[320px] h-fit sticky top-24"
         role="complementary"
-        aria-label="Transaction filters"
+        aria-label={t("title")}
       >
         <FilterContent {...sharedProps} isMobile={false} />
       </div>
