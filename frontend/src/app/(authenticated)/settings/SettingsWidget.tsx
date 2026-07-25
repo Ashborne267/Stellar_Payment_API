@@ -7,11 +7,11 @@ import {
   useMemo,
   useRef,
   useState,
+  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useTranslations } from "next-intl";
 import { useOptimisticUpdate } from "@/hooks/useOptimisticUpdate";
-import { useDropzone } from "react-dropzone";
 import Link from "next/link";
 import Image from "next/image";
 import CopyButton from "@/components/CopyButton";
@@ -23,9 +23,6 @@ import {
   useSetMerchantApiKey,
 } from "@/lib/merchant-store";
 import { useDisplayPreferences } from "@/lib/display-preferences";
-import WebhookHealthIndicator from "@/components/WebhookHealthIndicator";
-import DangerZone from "@/components/DangerZone";
-import { EmailReceiptPreview } from "@/components/EmailReceiptPreview";
 import SettingsPanelSkeleton from "@/components/SettingsPanelSkeleton";
 import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import { Spinner } from "@/components/ui/Spinner";
@@ -43,6 +40,21 @@ const UserPermissionsManager = dynamic(
     loading: () => <SettingsPanelSkeleton />,
   },
 );
+const WebhookHealthIndicator = dynamic(
+  () => import("@/components/WebhookHealthIndicator"),
+  { ssr: false },
+);
+const DangerZone = dynamic(() => import("@/components/DangerZone"), {
+  ssr: false,
+  loading: () => <SettingsPanelSkeleton />,
+});
+const EmailReceiptPreview = dynamic(
+  () =>
+    import("@/components/EmailReceiptPreview").then(
+      (mod) => mod.EmailReceiptPreview,
+    ),
+  { ssr: false },
+);
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const HEX_COLOR_REGEX = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/;
@@ -57,6 +69,8 @@ const BRANDING_FIELD_LABEL_KEYS: Record<string, string> = {
   secondary_color: "secondary",
   background_color: "background",
 };
+const LOGO_ACCEPT = ".png,.jpg,.jpeg,.svg";
+const LOGO_FILE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "svg"]);
 
 
 interface WebhookDomainVerification {
@@ -317,6 +331,8 @@ export default function SettingsWidget() {
   const [verifyingWebhookDomain, setVerifyingWebhookDomain] = useState(false);
   const desktopTabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
   const mobileTabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
+  const logoInputRef = useRef<HTMLInputElement | null>(null);
+  const [isLogoDragActive, setIsLogoDragActive] = useState(false);
 
   useHydrateMerchantStore();
 
@@ -405,12 +421,17 @@ export default function SettingsWidget() {
     [],
   );
 
-  const onDrop = useCallback(
-    (files: File[]) => {
-      const file = files[0];
+  const handleLogoFiles = useCallback(
+    (files: FileList | File[] | null) => {
+      const file = files?.[0];
       if (!file) return;
       if (file.size > 2 * 1024 * 1024) {
         toast.error(t("imageSizeLimit"));
+        return;
+      }
+      const extension = file.name.split(".").pop()?.toLowerCase();
+      if (!extension || !LOGO_FILE_EXTENSIONS.has(extension)) {
+        toast.error(t("logoFormats"));
         return;
       }
       const reader = new FileReader();
@@ -423,15 +444,14 @@ export default function SettingsWidget() {
     [updateBrandingField, t],
   );
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      "image/png": [".png"],
-      "image/jpeg": [".jpg", ".jpeg"],
-      "image/svg+xml": [".svg"],
+  const handleLogoDrop = useCallback(
+    (event: ReactDragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      setIsLogoDragActive(false);
+      handleLogoFiles(event.dataTransfer.files);
     },
-    multiple: false,
-  });
+    [handleLogoFiles],
+  );
 
   const saveBranding = useCallback(async () => {
     if (!apiKey) return;
@@ -933,10 +953,38 @@ export default function SettingsWidget() {
                   {t("storeLogo")}
                 </label>
                 <div
-                  {...getRootProps()}
-                  className={`relative flex min-h-[120px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all ${isDragActive ? "border-[#0A0A0A] bg-[#F9F9F9]" : "border-[#E8E8E8] bg-[#F9F9F9] hover:border-[#0A0A0A]"}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => logoInputRef.current?.click()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      logoInputRef.current?.click();
+                    }
+                  }}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setIsLogoDragActive(true);
+                  }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    setIsLogoDragActive(false);
+                  }}
+                  onDrop={handleLogoDrop}
+                  className={`relative flex min-h-[120px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-all ${isLogoDragActive ? "border-[#0A0A0A] bg-[#F9F9F9]" : "border-[#E8E8E8] bg-[#F9F9F9] hover:border-[#0A0A0A]"}`}
+                  aria-label={t("uploadLogo")}
                 >
-                  <input {...getInputProps()} />
+                  <input
+                    ref={logoInputRef}
+                    type="file"
+                    accept={LOGO_ACCEPT}
+                    className="sr-only"
+                    onChange={(event) => {
+                      handleLogoFiles(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
                   {branding.logo_url ? (
                     <div className="flex flex-col items-center gap-2 p-4">
                       <Image
@@ -969,7 +1017,7 @@ export default function SettingsWidget() {
                         </svg>
                       </div>
                       <p className="text-sm font-medium text-[#0A0A0A]">
-                        {isDragActive ? t("dropHere") : t("uploadLogo")}
+                        {isLogoDragActive ? t("dropHere") : t("uploadLogo")}
                       </p>
                       <p className="text-xs text-[#6B6B6B]">
                         {t("logoFormats")}
