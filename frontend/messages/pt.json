@@ -573,5 +573,15 @@
     "successTitle": "KYC enviado com sucesso!",
     "successDescription": "Sua verificacao KYC foi enviada e esta em revisao.",
     "dash": "—"
+  },
+  "portfolioChartWidget": {
+    "title": "Valor do portafolio",
+    "allocation": "Distribuicao",
+    "trend": "Tendencia",
+    "loading": "Carregando grafico do portafolio...",
+    "historyLoading": "Carregando historico de desempenho...",
+    "emptyAllocation": "Ainda nao ha dados de alocacao.",
+    "emptyAssets": "Ainda nao ha ativos no portafolio.",
+    "emptyHistory": "Ainda nao ha historico de desempenho."
   }
 }

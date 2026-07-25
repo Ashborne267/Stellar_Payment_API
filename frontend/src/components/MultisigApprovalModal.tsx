@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { useMultisigState, useMultisigActions } from "@/lib/multisig-context";
 import { toast } from "sonner";
 import CopyButton from "@/components/CopyButton";
@@ -75,6 +76,7 @@ export default function MultisigApprovalModal({
   networkPassphrase,
   transaction: initialTransaction,
 }: MultisigApprovalModalProps) {
+  const t = useTranslations("multisigModal");
   const prefersReducedMotion = useReducedMotion();
   const modalRef = useRef<HTMLDivElement>(null);
 
@@ -173,20 +175,20 @@ export default function MultisigApprovalModal({
   const handleSign = useCallback(async (signerId: string) => {
     try {
       await signTransaction(signerId);
-      toast.success("Transaction signed successfully");
+      toast.success(t("toasts.signed"));
     } catch (err) {
       console.error("Signing failed:", err);
     }
-  }, [signTransaction]);
+  }, [signTransaction, t]);
 
   const handleSubmit = useCallback(async () => {
     try {
       await submitTransaction();
-      toast.success("Transaction submitted successfully");
+      toast.success(t("toasts.submitted"));
     } catch (err) {
       console.error("Submission failed:", err);
     }
-  }, [submitTransaction]);
+  }, [submitTransaction, t]);
 
   const handleRetry = useCallback(() => {
     retryAction();
@@ -194,11 +196,11 @@ export default function MultisigApprovalModal({
 
   // Step components with improved accessibility
   const ReviewStep = () => (
-    <div className="space-y-6" role="region" aria-label="Review transaction section">
+    <div className="space-y-6" role="region" aria-label={t("review.sectionAriaLabel")}>
       <div className="text-center">
-        <h3 className="text-xl font-bold text-white" id="review-title">Review Transaction</h3>
+        <h3 className="text-xl font-bold text-white" id="review-title">{t("review.heading")}</h3>
         <p className="mt-2 text-sm text-slate-400" id="review-description">
-          Review the transaction details and sign if you approve
+          {t("review.description")}
         </p>
       </div>
 
@@ -207,13 +209,13 @@ export default function MultisigApprovalModal({
           {/* Transaction Details */}
           <div className="rounded-xl border border-white/10 bg-white/5 p-4 space-y-3">
             <div className="flex justify-between items-center">
-              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Amount</span>
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">{t("review.amount")}</span>
               <span className="font-mono text-sm text-white">
                 {transaction.amount} {transaction.assetCode}
               </span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">To</span>
+              <span className="text-xs font-medium uppercase tracking-wider text-slate-500">{t("review.to")}</span>
               <div className="flex items-center gap-2">
                 <span className="font-mono text-sm text-slate-200 truncate max-w-[200px]">
                   {transaction.destination}
@@ -223,7 +225,7 @@ export default function MultisigApprovalModal({
             </div>
             {transaction.memo && (
               <div className="flex justify-between items-center">
-                <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Memo</span>
+                <span className="text-xs font-medium uppercase tracking-wider text-slate-500">{t("review.memo")}</span>
                 <span className="font-mono text-sm text-slate-200">{transaction.memo}</span>
               </div>
             )}
@@ -233,7 +235,7 @@ export default function MultisigApprovalModal({
           <div className="space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                Signatures ({signedCount}/{requiredSignatures})
+                {t("review.signaturesLabel", { signed: signedCount, required: requiredSignatures })}
               </span>
               <span className="text-xs text-slate-400">{Math.round(progress)}%</span>
             </div>
@@ -243,7 +245,7 @@ export default function MultisigApprovalModal({
                 aria-valuenow={Math.round(progress)}
                 aria-valuemin={0}
                 aria-valuemax={100}
-                aria-label="Signature progress"
+                aria-label={t("review.progressAriaLabel")}
               >
                 <motion.div 
                   className="bg-mint h-2 rounded-full"
@@ -256,8 +258,8 @@ export default function MultisigApprovalModal({
           </div>
 
           {/* Signers List */}
-          <div className="space-y-2" role="region" aria-label="Signers list">
-            <span className="text-xs font-medium uppercase tracking-wider text-slate-500" id="signers-label">Signers</span>
+          <div className="space-y-2" role="region" aria-label={t("review.signersListAriaLabel")}>
+            <span className="text-xs font-medium uppercase tracking-wider text-slate-500" id="signers-label">{t("review.signersLabel")}</span>
             <motion.ul
               className="space-y-2"
               aria-labelledby="signers-label"
@@ -275,7 +277,11 @@ export default function MultisigApprovalModal({
                       : "border-white/10 bg-white/5"
                   }`}
                   role="listitem"
-                  aria-label={`${signer.name || `Signer ${signer.id.slice(0, 8)}`} - Weight: ${signer.weight} - ${signer.hasSigned ? "Signed" : "Not signed"}`}
+                  aria-label={t("review.signerAriaLabel", {
+                    name: signer.name || t("review.signerFallbackName", { id: signer.id.slice(0, 8) }),
+                    weight: signer.weight,
+                    status: signer.hasSigned ? t("review.signedStatus") : t("review.notSignedStatus"),
+                  })}
                 >
                   <div className="flex items-center gap-3">
                     <div
@@ -286,10 +292,10 @@ export default function MultisigApprovalModal({
                     />
                     <div>
                       <p className="text-sm font-medium text-white">
-                        {signer.name || `Signer ${signer.id.slice(0, 8)}`}
+                        {signer.name || t("review.signerFallbackName", { id: signer.id.slice(0, 8) })}
                       </p>
                       <p className="text-xs text-slate-400">
-                        Weight: {signer.weight} • {signer.publicKey.slice(0, 8)}...
+                        {t("review.signerWeight", { weight: signer.weight, publicKey: signer.publicKey.slice(0, 8) })}
                       </p>
                     </div>
                   </div>
@@ -305,10 +311,13 @@ export default function MultisigApprovalModal({
                         ? "bg-mint text-black hover:bg-glow"
                         : "bg-white/10 text-slate-400 cursor-not-allowed"
                     }`}
-                    aria-label={`${signer.hasSigned ? "Signed" : "Sign"} transaction as ${signer.name || `signer ${signer.id.slice(0, 8)}`}`}
+                    aria-label={t("review.signButtonAriaLabel", {
+                      action: signer.hasSigned ? t("review.signedStatus") : t("review.signButton"),
+                      name: signer.name || t("review.signerFallbackName", { id: signer.id.slice(0, 8) }),
+                    })}
                     aria-pressed={signer.hasSigned}
                   >
-                    {signer.hasSigned ? "Signed" : isLoading ? "Signing..." : "Sign"}
+                    {signer.hasSigned ? t("review.signedStatus") : isLoading ? t("review.signingButton") : t("review.signButton")}
                   </motion.button>
                 </motion.li>
               ))}
@@ -321,7 +330,7 @@ export default function MultisigApprovalModal({
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <span>Expires in {timeRemaining}</span>
+              <span>{t("review.expiresIn", { time: timeRemaining })}</span>
             </div>
           )}
 
@@ -334,7 +343,7 @@ export default function MultisigApprovalModal({
               whileTap={!prefersReducedMotion && !isLoading ? { scale: 0.98 } : undefined}
               className="w-full py-3 bg-mint text-black font-semibold rounded-xl hover:bg-glow transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isLoading ? "Submitting..." : "Submit Transaction"}
+              {isLoading ? t("review.submittingButton") : t("review.submitButton")}
             </motion.button>
           )}
         </div>
@@ -348,9 +357,9 @@ export default function MultisigApprovalModal({
         <div className="w-16 h-16 border-4 border-mint border-t-transparent rounded-full animate-spin" />
         <div className="absolute inset-0 w-16 h-16 border-4 border-mint/20 rounded-full animate-ping" />
       </div>
-      <h3 className="text-xl font-bold text-white">Processing Transaction</h3>
+      <h3 className="text-xl font-bold text-white">{t("processing.heading")}</h3>
       <p className="mt-2 text-sm text-slate-400">
-        Submitting your transaction to the Stellar network...
+        {t("processing.description")}
       </p>
     </div>
   );
@@ -364,15 +373,15 @@ export default function MultisigApprovalModal({
             <div className="absolute inset-0 w-16 h-16 border-4 border-mint/20 rounded-full animate-ping" />
           </div>
           <div>
-            <h3 className="text-xl font-bold text-white">Transaction Submitted</h3>
+            <h3 className="text-xl font-bold text-white">{t("confirm.pendingHeading")}</h3>
             <p className="mt-2 text-sm text-slate-400">
-              Awaiting network confirmation...
+              {t("confirm.pendingDescription")}
             </p>
           </div>
           {transaction?.submittedTxHash && (
             <div className="rounded-xl border border-mint/30 bg-mint/5 p-4">
               <p className="text-xs font-medium uppercase tracking-wider text-mint mb-2">
-                Transaction Hash (pending)
+                {t("confirm.hashPendingLabel")}
               </p>
               <div className="flex items-center justify-center gap-2">
                 <code className="font-mono text-sm text-slate-200">
@@ -386,7 +395,7 @@ export default function MultisigApprovalModal({
             disabled
             className="px-6 py-2 bg-mint/50 text-black/50 font-semibold rounded-xl cursor-not-allowed"
           >
-            Confirming...
+            {t("confirm.confirmingButton")}
           </motion.button>
         </>
       ) : (
@@ -397,14 +406,14 @@ export default function MultisigApprovalModal({
             </svg>
           </div>
           <div>
-            <h3 className="text-xl font-bold text-white">Transaction Approved</h3>
+            <h3 className="text-xl font-bold text-white">{t("confirm.approvedHeading")}</h3>
             <p className="mt-2 text-sm text-slate-400">
-              Your multi-signature transaction has been successfully submitted
+              {t("confirm.approvedDescription")}
             </p>
           </div>
           {transaction?.submittedTxHash && (
             <div className="rounded-xl border border-mint/30 bg-mint/5 p-4">
-              <p className="text-xs font-medium uppercase tracking-wider text-mint mb-2">Transaction Hash</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-mint mb-2">{t("confirm.hashLabel")}</p>
               <div className="flex items-center justify-center gap-2">
                 <code className="font-mono text-sm text-slate-200">
                   {transaction.submittedTxHash}
@@ -419,7 +428,7 @@ export default function MultisigApprovalModal({
             whileTap={!prefersReducedMotion ? { scale: 0.98 } : undefined}
             className="px-6 py-2 bg-mint text-black font-semibold rounded-xl hover:bg-glow transition-colors"
           >
-            Close
+            {t("confirm.closeButton")}
           </motion.button>
         </>
       )}
@@ -434,9 +443,9 @@ export default function MultisigApprovalModal({
         </svg>
       </div>
       <div>
-        <h3 className="text-xl font-bold text-white">Transaction Failed</h3>
+        <h3 className="text-xl font-bold text-white">{t("error.heading")}</h3>
         <p className="mt-2 text-sm text-slate-400">
-          {error || "An error occurred while processing your transaction"}
+          {error || t("error.defaultMessage")}
         </p>
       </div>
       <div className="flex gap-3 justify-center">
@@ -446,7 +455,7 @@ export default function MultisigApprovalModal({
           whileTap={!prefersReducedMotion ? { scale: 0.98 } : undefined}
           className="px-6 py-2 bg-white/10 text-white font-semibold rounded-xl hover:bg-white/20 transition-colors"
         >
-          Try Again
+          {t("error.tryAgainButton")}
         </motion.button>
         <motion.button
           onClick={handleClose}
@@ -454,7 +463,7 @@ export default function MultisigApprovalModal({
           whileTap={!prefersReducedMotion ? { scale: 0.98 } : undefined}
           className="px-6 py-2 bg-slate-600 text-white font-semibold rounded-xl hover:bg-slate-500 transition-colors"
         >
-          Close
+          {t("error.closeButton")}
         </motion.button>
       </div>
     </div>
@@ -509,10 +518,15 @@ export default function MultisigApprovalModal({
             <div className="flex items-center justify-between border-b border-white/10 p-6">
               <div>
                 <h2 id="multisig-modal-title" className="text-xl font-bold text-white">
-                  Multi-Signature Approval
+                  {t("title")}
                 </h2>
                 <p id="multisig-modal-description" className="text-sm text-slate-400">
-                  {isExpired ? "Transaction Expired" : `Step ${currentStep === "review" ? "1" : currentStep === "processing" ? "2" : currentStep === "confirm" ? "3" : "1"} of 3`}
+                  {isExpired
+                    ? t("expired.statusLabel")
+                    : t("stepOf", {
+                        step: currentStep === "review" ? "1" : currentStep === "processing" ? "2" : currentStep === "confirm" ? "3" : "1",
+                        total: "3",
+                      })}
                 </p>
               </div>
               <motion.button
@@ -521,7 +535,7 @@ export default function MultisigApprovalModal({
                 whileHover={!prefersReducedMotion && !isLoading ? { scale: 1.1, backgroundColor: "rgba(255,255,255,0.1)" } : undefined}
                 whileTap={!prefersReducedMotion && !isLoading ? { scale: 0.9 } : undefined}
                 className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                aria-label="Close modal"
+                aria-label={t("closeModal")}
               >
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -536,11 +550,11 @@ export default function MultisigApprovalModal({
               className="sr-only"
             >
               {currentStep === "processing"
-                ? "Processing your transaction. Please wait."
+                ? t("announcements.processing")
                 : currentStep === "confirm"
-                ? "Transaction approved successfully."
+                ? t("announcements.confirmed")
                 : currentStep === "error"
-                ? "Transaction failed. See error details below."
+                ? t("announcements.failed")
                 : ""}
             </div>
 
@@ -562,9 +576,9 @@ export default function MultisigApprovalModal({
                     </svg>
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold text-white">Transaction Expired</h3>
+                    <h3 className="text-xl font-bold text-white">{t("expired.heading")}</h3>
                     <p className="mt-2 text-sm text-slate-400">
-                      This transaction has expired and can no longer be signed or submitted.
+                      {t("expired.description")}
                     </p>
                   </div>
                   <motion.button
@@ -573,7 +587,7 @@ export default function MultisigApprovalModal({
                     whileTap={!prefersReducedMotion ? { scale: 0.98 } : undefined}
                     className="px-6 py-2 bg-slate-600 text-white font-semibold rounded-xl hover:bg-slate-500 transition-colors"
                   >
-                    Close
+                    {t("expired.closeButton")}
                   </motion.button>
                 </div>
               ) : (
@@ -598,7 +612,7 @@ export default function MultisigApprovalModal({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                     </svg>
                     <div className="flex-1">
-                      <p className="text-sm font-medium text-red-400">Error</p>
+                      <p className="text-sm font-medium text-red-400">{t("error.bannerTitle")}</p>
                       <p className="text-sm text-red-300 mt-1">{error}</p>
                     </div>
                     <motion.button
@@ -606,7 +620,7 @@ export default function MultisigApprovalModal({
                       whileHover={!prefersReducedMotion ? { scale: 1.1 } : undefined}
                       whileTap={!prefersReducedMotion ? { scale: 0.9 } : undefined}
                       className="text-red-400 hover:text-red-300 transition-colors"
-                      aria-label="Clear error"
+                      aria-label={t("error.clearErrorAriaLabel")}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

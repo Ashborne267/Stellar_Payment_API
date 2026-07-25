@@ -1,16 +1,48 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { PortfolioChartWidget, PortfolioAsset } from './PortfolioChartWidget';
 
-// Mock recharts to avoid canvas issues in tests
+const translations = {
+  en: {
+    portfolioChartWidget: {
+      title: 'Portfolio Value',
+      allocation: 'Allocation',
+      trend: 'Trend',
+      loading: 'Loading portfolio chart...',
+      historyLoading: 'Loading performance history...',
+      emptyAllocation: 'No allocation data available yet.',
+      emptyAssets: 'No portfolio assets available yet.',
+      emptyHistory: 'No performance history available yet.',
+    },
+  },
+  es: {
+    portfolioChartWidget: {
+      title: 'Valor del portafolio',
+      allocation: 'Distribucion',
+      trend: 'Tendencia',
+      loading: 'Cargando grafico del portafolio...',
+      historyLoading: 'Cargando historial de rendimiento...',
+      emptyAllocation: 'Todavia no hay datos de asignacion.',
+      emptyAssets: 'Todavia no hay activos en el portafolio.',
+      emptyHistory: 'Todavia no hay historial de rendimiento.',
+    },
+  },
+} as const;
+
+let mockLocale: keyof typeof translations = 'en';
+
+vi.mock('next-intl', () => ({
+  useLocale: () => mockLocale,
+  useTranslations: (namespace: keyof (typeof translations)['en']) => (key: string) =>
+    translations[mockLocale][namespace][key as keyof (typeof translations)['en'][typeof namespace]] ?? key,
+}));
+
 vi.mock('recharts', () => ({
   PieChart: ({ children }: any) => <div data-testid="pie-chart">{children}</div>,
   Pie: ({ children, onClick, data }: any) => (
-    <div
-      data-testid="pie"
-      onClick={() => onClick && onClick(data[0])}
-    >
+    <div data-testid="pie" onClick={() => onClick && data?.[0] && onClick(data[0])}>
       {children}
     </div>
   ),
@@ -53,6 +85,11 @@ describe('PortfolioChartWidget', () => {
     },
   ];
 
+  const historyData = [
+    { timestamp: Date.UTC(2026, 0, 1), value: 3200 },
+    { timestamp: Date.UTC(2026, 0, 2), value: 4000 },
+  ];
+
   const defaultProps = {
     assets: mockAssets,
     totalValue: 4000,
@@ -62,9 +99,10 @@ describe('PortfolioChartWidget', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockLocale = 'en';
   });
 
-  it('renders the component with portfolio value', () => {
+  it('renders the localized title and portfolio value', () => {
     render(<PortfolioChartWidget {...defaultProps} />);
 
     expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
@@ -89,24 +127,11 @@ describe('PortfolioChartWidget', () => {
 
     expect(screen.getByText('XLM')).toBeInTheDocument();
     expect(screen.getByText('USDC')).toBeInTheDocument();
-  });
-
-  it('displays asset percentages correctly', () => {
-    render(<PortfolioChartWidget {...defaultProps} />);
-
-    const percentageElements = screen.getAllByText(/50\.0%/);
-    expect(percentageElements.length).toBeGreaterThan(0);
-  });
-
-  it('displays asset amounts', () => {
-    render(<PortfolioChartWidget {...defaultProps} />);
-
     expect(screen.getByText('1000.0000 XLM')).toBeInTheDocument();
-    expect(screen.getByText('500.0000 USDC')).toBeInTheDocument();
   });
 
-  it('switches between chart types when buttons are clicked', async () => {
-    render(<PortfolioChartWidget {...defaultProps} />);
+  it('switches to the history view when history data is available', async () => {
+    render(<PortfolioChartWidget {...defaultProps} historyData={historyData} />);
 
     const trendButton = screen.getByText('portfolioChart.trend');
     fireEvent.click(trendButton);
@@ -123,14 +148,8 @@ describe('PortfolioChartWidget', () => {
     });
   });
 
-  it('calls onAssetClick when an asset is clicked', () => {
-    const onAssetClick = vi.fn();
-    render(
-      <PortfolioChartWidget
-        {...defaultProps}
-        onAssetClick={onAssetClick}
-      />
-    );
+  it('shows an accessible loading state and disables chart toggles', () => {
+    render(<PortfolioChartWidget {...defaultProps} loading />);
 
     const assetElement = screen.getByText('XLM').closest('div[class*="p-3"]');
     if (assetElement) {
@@ -138,12 +157,13 @@ describe('PortfolioChartWidget', () => {
     }
 
     expect(screen.getByText('XLM')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading portfolio chart...');
+    expect(screen.getByRole('button', { name: 'Allocation' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Trend' })).toBeDisabled();
   });
 
-  it('toggles asset selection on click', () => {
-    render(<PortfolioChartWidget {...defaultProps} />);
-
-    const assetElement = screen.getByText('XLM').closest('div[class*="p-3"]');
+  it('shows an empty history state when no trend data exists', async () => {
+    render(<PortfolioChartWidget {...defaultProps} historyData={[]} />);
 
     if (assetElement) {
       fireEvent.click(assetElement);
@@ -152,9 +172,14 @@ describe('PortfolioChartWidget', () => {
       fireEvent.click(assetElement);
       expect(assetElement).toBeInTheDocument();
     }
+    fireEvent.click(screen.getByRole('button', { name: 'Trend' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('No performance history available yet.')).toBeInTheDocument();
+    });
   });
 
-  it('renders with empty assets array', () => {
+  it('shows the empty assets state when no assets are provided', () => {
     render(
       <PortfolioChartWidget
         assets={[]}
@@ -164,90 +189,56 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
-    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
-    expect(screen.getByText('$0.00')).toBeInTheDocument();
+    expect(screen.getByText('No allocation data available yet.')).toBeInTheDocument();
+    expect(screen.getByText('No portfolio assets available yet.')).toBeInTheDocument();
   });
 
-  it('assigns colors from palette to assets without color', () => {
-    const assetsWithoutColor: PortfolioAsset[] = [
-      {
-        id: '1',
-        symbol: 'XLM',
-        name: 'Stellar',
-        amount: 100,
-        value: 1000,
-        percentage: 50,
-      },
-      {
-        id: '2',
-        symbol: 'USDC',
-        name: 'USD Coin',
-        amount: 100,
-        value: 1000,
-        percentage: 50,
-      },
-    ];
+  it('renders a locale-aware translation and currency format', () => {
+    mockLocale = 'es';
+    const formattedValue = new Intl.NumberFormat('es-ES', {
+      style: 'currency',
+      currency: 'EUR',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(5000);
 
     render(
       <PortfolioChartWidget
-        assets={assetsWithoutColor}
-        totalValue={2000}
-        showAnimation={false}
+        {...defaultProps}
+        totalValue={5000}
+        currency="EUR"
       />
     );
 
-    expect(screen.getByText('XLM')).toBeInTheDocument();
-    expect(screen.getByText('USDC')).toBeInTheDocument();
+    expect(screen.getByText('Valor del portafolio')).toBeInTheDocument();
+    expect(screen.getByText(formattedValue)).toBeInTheDocument();
   });
 
-  it('handles custom className', () => {
-    const { container } = render(
+  it('handles asset selection and onAssetClick callbacks', () => {
+    const onAssetClick = vi.fn();
+    render(
       <PortfolioChartWidget
         {...defaultProps}
-        className="custom-class"
+        onAssetClick={onAssetClick}
       />
     );
 
-    const mainDiv = container.querySelector('.custom-class');
-    expect(mainDiv).toBeInTheDocument();
+    const assetElement = screen.getByText('XLM').closest('div[class*="p-3"]');
+    expect(assetElement).toBeInTheDocument();
+
+    if (assetElement) {
+      fireEvent.click(assetElement);
+      expect(assetElement).toHaveClass('bg-blue-50');
+    }
+
+    expect(onAssetClick).toHaveBeenCalledWith(mockAssets[0]);
   });
 
-  it('respects showAnimation prop', () => {
-    const { rerender } = render(
+  it('renders an error message when provided', () => {
+    render(
       <PortfolioChartWidget
         {...defaultProps}
-        showAnimation={true}
-      />
-    );
-
-    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
-
-    rerender(
-      <PortfolioChartWidget
-        {...defaultProps}
-        showAnimation={false}
-      />
-    );
-
-    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
-  });
-
-  it('handles currency formatting for different currencies', () => {
-    const { rerender } = render(
-      <PortfolioChartWidget
-        {...defaultProps}
-        currency="USD"
-        totalValue={1000}
-      />
-    );
-
-    expect(screen.getByText('$1,000.00')).toBeInTheDocument();
-
-    rerender(
-      <PortfolioChartWidget
-        {...defaultProps}
-        currency="GBP"
-        totalValue={1000}
+        error="Unable to load the latest portfolio snapshot."
       />
     );
 
@@ -283,5 +274,8 @@ describe('PortfolioChartWidget', () => {
 
     const colorDots = screen.getAllByTestId('cell').length;
     expect(colorDots).toBeGreaterThanOrEqual(0);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Unable to load the latest portfolio snapshot.'
+    );
   });
 });

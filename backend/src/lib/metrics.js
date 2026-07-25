@@ -202,6 +202,53 @@ export const dbPoolerSignatureVerified = new client.Counter({
   labelNames: ["result"], // valid, invalid, skipped
 });
 
+/**
+ * Smart Contract Oracle Integrator Metrics (Issue #TBD)
+ */
+
+export const oracleCacheHitTotal = new client.Counter({
+  name: "oracle_cache_hit_total",
+  help: "Total number of oracle cache hits",
+  labelNames: ["provider"],
+});
+
+export const oracleCacheMissTotal = new client.Counter({
+  name: "oracle_cache_miss_total",
+  help: "Total number of oracle cache misses",
+  labelNames: ["provider"],
+});
+
+export const oracleCacheSize = new client.Gauge({
+  name: "oracle_cache_size",
+  help: "Current number of entries in the oracle cache",
+  labelNames: ["provider"],
+});
+
+export const oracleFetchDuration = new client.Histogram({
+  name: "oracle_fetch_duration_seconds",
+  help: "Time taken to fetch oracle data from provider",
+  labelNames: ["provider", "result"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+});
+
+export const oracleFetchErrorsTotal = new client.Counter({
+  name: "oracle_fetch_errors_total",
+  help: "Total number of oracle fetch errors",
+  labelNames: ["provider", "error_type"],
+});
+
+export const oracleStaleDataServedTotal = new client.Counter({
+  name: "oracle_stale_data_served_total",
+  help: "Total number of times stale oracle data was served as fallback",
+  labelNames: ["provider"],
+});
+
+export const oracleCircuitBreakerTripsTotal = new client.Counter({
+  name: "oracle_circuit_breaker_trips_total",
+  help: "Total number of times the oracle circuit breaker was tripped",
+  labelNames: ["provider"],
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -230,5 +277,12 @@ register.registerMetric(queryCacheSize);
 register.registerMetric(dbPoolerRateLimitExceeded);
 register.registerMetric(dbPoolerQueryTotal);
 register.registerMetric(dbPoolerSignatureVerified);
+register.registerMetric(oracleCacheHitTotal);
+register.registerMetric(oracleCacheMissTotal);
+register.registerMetric(oracleCacheSize);
+register.registerMetric(oracleFetchDuration);
+register.registerMetric(oracleFetchErrorsTotal);
+register.registerMetric(oracleStaleDataServedTotal);
+register.registerMetric(oracleCircuitBreakerTripsTotal);
 
 export { register };
