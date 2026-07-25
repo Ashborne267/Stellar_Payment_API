@@ -130,6 +130,17 @@ export const ledgerMonitorCircuitBreakerTrips = new client.Counter({
   help: "Total number of times the circuit breaker was tripped",
 });
 
+export const ledgerMonitorBatchSize = new client.Gauge({
+  name: "ledger_monitor_batch_size",
+  help: "Number of pending payments fetched in the most recent ledger monitor cycle",
+});
+
+export const ledgerMonitorRateLimiterWaitSeconds = new client.Histogram({
+  name: "ledger_monitor_rate_limiter_wait_seconds",
+  help: "Time spent waiting for a Horizon rate-limit token during a ledger monitor cycle",
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+});
+
 /**
  * Rate Limiting Metrics
  */
@@ -209,6 +220,8 @@ register.registerMetric(signatureVerificationReplayAttempts);
 register.registerMetric(ledgerMonitorCycleDuration);
 register.registerMetric(ledgerMonitorPaymentsChecked);
 register.registerMetric(ledgerMonitorCircuitBreakerTrips);
+register.registerMetric(ledgerMonitorBatchSize);
+register.registerMetric(ledgerMonitorRateLimiterWaitSeconds);
 register.registerMetric(rateLimitExceededTotal);
 register.registerMetric(rateLimitRequestsTotal);
 register.registerMetric(queryCacheHitTotal);

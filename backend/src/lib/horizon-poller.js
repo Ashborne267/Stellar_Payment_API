@@ -52,6 +52,8 @@ import {
   ledgerMonitorCycleDuration,
   ledgerMonitorPaymentsChecked,
   ledgerMonitorCircuitBreakerTrips,
+  ledgerMonitorBatchSize,
+  ledgerMonitorRateLimiterWaitSeconds,
   rateLimitRequestsTotal,
   rateLimitExceededTotal,
 } from "./metrics.js";
@@ -205,6 +207,7 @@ export function createLedgerMonitorRateLimiter({
         "Horizon poller: rate limit reached — delaying Horizon request",
       );
       await sleepFn(delayMs);
+      ledgerMonitorRateLimiterWaitSeconds.observe(delayMs / 1000);
       refill();
       tokens = Math.max(0, tokens - 1);
     },
@@ -287,6 +290,8 @@ async function pollPendingPayments() {
       _consecutiveFailures = 0;
       _backoffIndex = 0;
     }
+
+    ledgerMonitorBatchSize.set(pending?.length ?? 0);
 
     if (!pending || pending.length === 0) return;
 
@@ -442,20 +447,22 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
           );
           ledgerMonitorPaymentsChecked.inc({ result: "failed" });
 
-          streamManager.notify(payment.id, "payment.failed", {
-            status: "failed",
-            reason: "underpayment",
-            expected_amount: expected,
-            received_amount: received,
-          });
-          if (_io && payment.merchant_id) {
-            _io.to(`merchant:${payment.merchant_id}`).emit("payment:failed", {
+          notifyPaymentEvent(payment, {
+            sseEvent: "payment.failed",
+            sseData: {
+              status: "failed",
+              reason: "underpayment",
+              expected_amount: expected,
+              received_amount: received,
+            },
+            socketEvent: "payment:failed",
+            socketData: {
               id: payment.id,
               reason: "underpayment",
               expected_amount: expected,
               received_amount: received,
-            });
-          }
+            },
+          });
         } else if (diff > 0.0000001) {
           // Overpayment — confirm but flag
           const latencySeconds = (Date.now() - new Date(payment.created_at).getTime()) / 1000;
@@ -483,18 +490,20 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
             "Horizon poller: overpayment — confirmed with flag",
           );
           ledgerMonitorPaymentsChecked.inc({ result: "confirmed" });
-          streamManager.notify(payment.id, "payment.confirmed", {
-            status: "confirmed",
-            tx_id: anyPayment.transaction_hash,
-            overpayment: true,
-          });
-          if (_io && payment.merchant_id) {
-            _io.to(`merchant:${payment.merchant_id}`).emit("payment:confirmed", {
+          notifyPaymentEvent(payment, {
+            sseEvent: "payment.confirmed",
+            sseData: {
+              status: "confirmed",
+              tx_id: anyPayment.transaction_hash,
+              overpayment: true,
+            },
+            socketEvent: "payment:confirmed",
+            socketData: {
               id: payment.id,
               tx_id: anyPayment.transaction_hash,
               overpayment: true,
-            });
-          }
+            },
+          });
         }
       }
       return;
@@ -585,15 +594,15 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
     );
     ledgerMonitorPaymentsChecked.inc({ result: "confirmed" });
 
-    // SSE → customer checkout page
-    streamManager.notify(payment.id, "payment.confirmed", {
-      status: "confirmed",
-      tx_id: match.transaction_hash,
-    });
-
-    // Socket.io → merchant dashboard
-    if (_io && payment.merchant_id) {
-      _io.to(`merchant:${payment.merchant_id}`).emit("payment:confirmed", {
+    // SSE (customer checkout page) + Socket.io (merchant dashboard)
+    notifyPaymentEvent(payment, {
+      sseEvent: "payment.confirmed",
+      sseData: {
+        status: "confirmed",
+        tx_id: match.transaction_hash,
+      },
+      socketEvent: "payment:confirmed",
+      socketData: {
         id: payment.id,
         amount: payment.amount,
         asset: payment.asset,
@@ -601,8 +610,8 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
         recipient: payment.recipient,
         tx_id: match.transaction_hash,
         confirmed_at: new Date().toISOString(),
-      });
-    }
+      },
+    });
 
     // Webhook
     const merchant = await loadMerchantNotificationConfig(payment.merchant_id, merchantConfigCache);
@@ -660,6 +669,18 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Notify both the customer (SSE) and merchant dashboard (Socket.io) of a
+ * payment status change. Consolidates the confirm/fail/overpayment emit
+ * pattern that was previously duplicated at each call site.
+ */
+function notifyPaymentEvent(payment, { sseEvent, sseData, socketEvent, socketData }) {
+  streamManager.notify(payment.id, sseEvent, sseData);
+  if (_io && payment.merchant_id) {
+    _io.to(`merchant:${payment.merchant_id}`).emit(socketEvent, socketData);
+  }
 }
 
 function parsePositiveInt(value, fallback) {
