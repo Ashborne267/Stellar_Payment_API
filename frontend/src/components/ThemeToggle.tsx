@@ -50,12 +50,16 @@ export default function ThemeToggle() {
 
   if (!isMounted || isLoading) {
     return (
-      <button 
+      <button
         className="flex h-9 w-9 items-center justify-center rounded-lg border border-white/10 bg-white/5 transition-all hover:bg-white/10 active:scale-95"
         aria-label="Loading theme settings"
+        aria-busy="true"
         disabled
       >
-        <div className="h-5 w-5 animate-pulse rounded bg-white/20" />
+        <div className="relative flex items-center justify-center">
+          <div className="h-5 w-5 border-2 border-white/20 border-t-white/60 rounded-full animate-spin" />
+          <div className="absolute h-5 w-5 border-2 border-transparent rounded-full animate-pulse" />
+        </div>
       </button>
     );
   }
