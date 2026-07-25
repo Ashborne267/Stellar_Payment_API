@@ -574,69 +574,14 @@
     "successDescription": "Your KYC verification has been submitted and is under review.",
     "dash": "—"
   },
-  "multisigModal": {
-    "title": "Multi-Signature Approval",
-    "closeModal": "Close modal",
-    "stepOf": "Step {step} of {total}",
-    "review": {
-      "heading": "Review Transaction",
-      "description": "Review the transaction details and sign if you approve",
-      "sectionAriaLabel": "Review transaction section",
-      "amount": "Amount",
-      "to": "To",
-      "memo": "Memo",
-      "signaturesLabel": "Signatures ({signed}/{required})",
-      "progressAriaLabel": "Signature progress",
-      "signersLabel": "Signers",
-      "signersListAriaLabel": "Signers list",
-      "signerFallbackName": "Signer {id}",
-      "signerWeight": "Weight: {weight} • {publicKey}...",
-      "signerAriaLabel": "{name} - Weight: {weight} - {status}",
-      "signedStatus": "Signed",
-      "notSignedStatus": "Not signed",
-      "signButton": "Sign",
-      "signingButton": "Signing...",
-      "signButtonAriaLabel": "{action} transaction as {name}",
-      "expiresIn": "Expires in {time}",
-      "submitButton": "Submit Transaction",
-      "submittingButton": "Submitting..."
-    },
-    "processing": {
-      "heading": "Processing Transaction",
-      "description": "Submitting your transaction to the Stellar network..."
-    },
-    "confirm": {
-      "pendingHeading": "Transaction Submitted",
-      "pendingDescription": "Awaiting network confirmation...",
-      "hashPendingLabel": "Transaction Hash (pending)",
-      "confirmingButton": "Confirming...",
-      "approvedHeading": "Transaction Approved",
-      "approvedDescription": "Your multi-signature transaction has been successfully submitted",
-      "hashLabel": "Transaction Hash",
-      "closeButton": "Close"
-    },
-    "error": {
-      "heading": "Transaction Failed",
-      "defaultMessage": "An error occurred while processing your transaction",
-      "tryAgainButton": "Try Again",
-      "closeButton": "Close",
-      "bannerTitle": "Error",
-      "clearErrorAriaLabel": "Clear error"
-    },
-    "expired": {
-      "heading": "Transaction Expired",
-      "description": "This transaction has expired and can no longer be signed or submitted.",
-      "closeButton": "Close",
-      "statusLabel": "Transaction Expired"
-    },
-    "announcements": {
-      "processing": "Processing your transaction. Please wait.",
-      "confirmed": "Transaction approved successfully.",
-      "failed": "Transaction failed. See error details below."
-    },
-    "toasts": {
-      "signed": "Transaction signed successfully",
-      "submitted": "Transaction submitted successfully"
-    }
+  "portfolioChartWidget": {
+    "title": "Portfolio Value",
+    "allocation": "Allocation",
+    "trend": "Trend",
+    "loading": "Loading portfolio chart...",
+    "historyLoading": "Loading performance history...",
+    "emptyAllocation": "No allocation data available yet.",
+    "emptyAssets": "No portfolio assets available yet.",
+    "emptyHistory": "No performance history available yet."
   }
 }
