@@ -1,3 +1,14 @@
+/**
+ * Multi-Signature Approval Modal Component
+ * Issue #1143: Upgrade dependencies and refactor Multi-sig Approval Modal
+ *
+ * UX enhancements:
+ * - Improved accessibility with ARIA attributes
+ * - Enhanced motion and animations with reduced-motion support
+ * - Better focus management and keyboard navigation
+ * - Responsive design for mobile and desktop
+ */
+
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
@@ -5,9 +16,7 @@ import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer
 import { useMultisigState, useMultisigActions } from "@/lib/multisig-context";
 import { toast } from "sonner";
 import CopyButton from "@/components/CopyButton";
-import {
-  errorMessageVariants,
-} from "@/lib/network-animations";
+import { errorMessageVariants } from "@/lib/network-animations";
 
 const backdropVariants = {
   hidden: { opacity: 0 },
@@ -469,7 +478,7 @@ export default function MultisigApprovalModal({
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-4 sm:p-6">
           {/* Backdrop */}
           <motion.div
             variants={backdropVariants}
@@ -478,6 +487,7 @@ export default function MultisigApprovalModal({
             exit="exit"
             onClick={handleClose}
             className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            aria-hidden="true"
           />
 
           {/* Modal */}
@@ -487,7 +497,7 @@ export default function MultisigApprovalModal({
             initial="hidden"
             animate="visible"
             exit="exit"
-            className="relative w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-[#050608] shadow-2xl backdrop-blur-xl outline-none"
+            className="relative w-full max-w-2xl overflow-hidden rounded-t-2xl sm:rounded-2xl border border-white/10 bg-[#050608] shadow-2xl backdrop-blur-xl outline-none"
             tabIndex={-1}
             role="dialog"
             aria-modal="true"
