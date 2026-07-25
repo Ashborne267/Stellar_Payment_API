@@ -1,0 +1,195 @@
+/**
+ * useOnboardingProgress
+ *
+ * Encapsulates all stateful logic for the Onboarding Progress Tracker so the
+ * component stays a pure presentation layer.
+ *
+ * Responsibilities:
+ * - Owns the useReducer instance and exposes read-only derived values.
+ * - Syncs external prop changes (steps array) into the reducer via SYNC_STEPS.
+ * - Syncs external currentStep prop changes via SET_CURRENT_STEP.
+ * - Handles optimistic step navigation with async callback + rollback.
+ * - Produces translated screen-reader announcement strings via useOnboardingI18n.
+ * - Fires onComplete when all required steps are done.
+ */
+
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useRef,
+} from "react";
+import {
+  onboardingReducer,
+  createInitialOnboardingState,
+  selectEffectiveStep,
+  selectProgressPercent,
+  type OnboardingState,
+} from "@/components/onboarding-reducer";
+import { useOnboardingI18n } from "@/hooks/useOnboardingI18n";
+
+// ── Shared step type (re-exported for consumers) ──────────────────────────────
+
+export interface OnboardingStep {
+  id: string;
+  title: string;
+  description: string;
+  completed: boolean;
+  required: boolean;
+  order: number;
+}
+
+// ── Options / return types ────────────────────────────────────────────────────
+
+export interface UseOnboardingProgressOptions {
+  steps: OnboardingStep[];
+  currentStep?: string;
+  onStepChange?: (stepId: string) => void | Promise<void>;
+  onComplete?: () => void;
+}
+
+export interface UseOnboardingProgressReturn {
+  sortedSteps: OnboardingStep[];
+  effectiveCurrentStep: string | undefined;
+  state: OnboardingState;
+  progressPercent: number;
+  completedCount: number;
+  isComplete: boolean;
+  progressSummaryId: string;
+  handleStepClick: (stepId: string) => Promise<void>;
+}
+
+// ── Hook ──────────────────────────────────────────────────────────────────────
+
+export function useOnboardingProgress({
+  steps,
+  currentStep: currentStepProp,
+  onStepChange,
+  onComplete,
+}: UseOnboardingProgressOptions): UseOnboardingProgressReturn {
+  const i18n = useOnboardingI18n();
+  const progressSummaryId = useId();
+
+  // ── Derived step data ────────────────────────────────────────────────────
+
+  const sortedSteps = useMemo(
+    () => [...steps].sort((a, b) => a.order - b.order),
+    [steps],
+  );
+
+  const completedCount = useMemo(
+    () => sortedSteps.filter((s) => s.completed).length,
+    [sortedSteps],
+  );
+
+  const isComplete = useMemo(() => {
+    const required = sortedSteps.filter((s) => s.required);
+    return required.length > 0 && required.every((s) => s.completed);
+  }, [sortedSteps]);
+
+  // ── Reducer ──────────────────────────────────────────────────────────────
+
+  const [state, dispatch] = useReducer(
+    onboardingReducer,
+    createInitialOnboardingState(
+      currentStepProp ?? sortedSteps[0]?.id,
+      sortedSteps.length,
+      completedCount,
+    ),
+  );
+
+  // Sync step counts when the steps prop changes
+  useEffect(() => {
+    dispatch({
+      type: "SYNC_STEPS",
+      payload: { total: sortedSteps.length, completed: completedCount },
+    });
+  }, [sortedSteps.length, completedCount]);
+
+  // Sync external currentStep prop
+  const prevCurrentStepPropRef = useRef(currentStepProp);
+  useEffect(() => {
+    if (
+      currentStepProp !== undefined &&
+      currentStepProp !== prevCurrentStepPropRef.current
+    ) {
+      dispatch({ type: "SET_CURRENT_STEP", payload: currentStepProp });
+      prevCurrentStepPropRef.current = currentStepProp;
+    }
+  }, [currentStepProp]);
+
+  // ── Derived values ────────────────────────────────────────────────────────
+
+  const effectiveCurrentStep = selectEffectiveStep(state);
+  const progressPercent = selectProgressPercent(state);
+
+  // ── Completion side-effect ────────────────────────────────────────────────
+
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+
+  useEffect(() => {
+    if (isComplete && sortedSteps.length > 0) {
+      dispatch({ type: "SET_ANNOUNCEMENT", payload: i18n.successTitle });
+      onCompleteRef.current?.();
+    }
+  }, [isComplete, sortedSteps.length, i18n.successTitle]);
+
+  // ── Progress announcements ────────────────────────────────────────────────
+
+  useEffect(() => {
+    dispatch({
+      type: "SET_ANNOUNCEMENT",
+      payload: i18n.progressAnnouncement(progressPercent),
+    });
+  }, [progressPercent, i18n]);
+
+  // ── Step click handler ────────────────────────────────────────────────────
+
+  const handleStepClick = useCallback(
+    async (stepId: string) => {
+      if (state.isPending) return;
+
+      const step = sortedSteps.find((s) => s.id === stepId);
+      if (!step) return;
+
+      dispatch({ type: "OPTIMISTIC_STEP", payload: stepId });
+
+      const status = i18n.statusLabel(
+        step.completed,
+        effectiveCurrentStep === stepId,
+      );
+      dispatch({
+        type: "SET_ANNOUNCEMENT",
+        payload: i18n.stepAnnouncement(step, sortedSteps.length, status),
+      });
+
+      try {
+        await onStepChange?.(stepId);
+        dispatch({ type: "CONFIRM_STEP", payload: stepId });
+      } catch {
+        dispatch({ type: "ROLLBACK_STEP" });
+        dispatch({
+          type: "SET_ANNOUNCEMENT",
+          payload: i18n.stepChangeFailed,
+        });
+      }
+    },
+    [sortedSteps, effectiveCurrentStep, onStepChange, state.isPending, i18n],
+  );
+
+  return {
+    sortedSteps,
+    effectiveCurrentStep,
+    state,
+    progressPercent,
+    completedCount,
+    isComplete,
+    progressSummaryId,
+    handleStepClick,
+  };
+}
