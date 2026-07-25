@@ -7,6 +7,7 @@ import { useLocale, useTranslations } from "next-intl";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import TransactionHistoryPagination from "@/components/TransactionHistoryPagination";
+import TransactionFilterSidebar from "@/components/TransactionFilterSidebar.lazy";
 import { localeToLanguageTag } from "@/i18n/config";
 import { toast } from "sonner";
 import {
@@ -33,17 +34,6 @@ const PaymentDetailModal = dynamic(
 const PaymentDetailsSheet = dynamic(
   () => import("@/components/PaymentDetailsSheet"),
   { ssr: false },
-);
-const TransactionFilterSidebar = dynamic(
-  () => import("@/components/TransactionFilterSidebar"),
-  {
-    ssr: false,
-    loading: () => {
-      const TransactionFilterSidebarSkeleton =
-        require("@/components/TransactionFilterSidebarSkeleton").default;
-      return <TransactionFilterSidebarSkeleton />;
-    },
-  },
 );
 
 interface Payment {
