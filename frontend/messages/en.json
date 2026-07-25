@@ -83,6 +83,21 @@
     "apiKeysTip": "Use the API Keys page to rotate your secret token periodically.",
     "webhookLogsTip": "Check Webhook Logs status if payments are not triggering your backend."
   },
+  "realTimeBalanceSync": {
+    "title": "Real-time Balances",
+    "refreshButton": "Refresh",
+    "syncing": "Syncing…",
+    "sectionAriaLabel": "Real-time balance information",
+    "balancesListAriaLabel": "Account balances",
+    "emptyState": "No balances available.",
+    "updatedLabel": "Updated",
+    "balanceItemAriaLabel": "{asset} balance: {balance}",
+    "liveRegion": {
+      "syncing": "Syncing balances…",
+      "error": "Balance sync error: {error}",
+      "updatedAt": "Balances updated at {time}."
+    }
+  },
   "createPaymentPage": {
     "eyebrow": "Dashboard",
     "title": "Create Payment Link",
