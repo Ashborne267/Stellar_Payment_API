@@ -202,6 +202,41 @@ export const dbPoolerSignatureVerified = new client.Counter({
   labelNames: ["result"], // valid, invalid, skipped
 });
 
+/**
+ * Exchange Rate Service Metrics
+ */
+
+export const exchangeRateQuoteRequests = new client.Counter({
+  name: "exchange_rate_quote_requests_total",
+  help: "Total number of exchange rate quote requests",
+  labelNames: ["source_asset", "dest_asset", "result"], // success, not_found, error, rate_limited, same_asset, not_pending
+});
+
+export const exchangeRateQuoteDuration = new client.Histogram({
+  name: "exchange_rate_quote_duration_seconds",
+  help: "Time taken to resolve an exchange rate quote in seconds",
+  labelNames: ["source_asset", "dest_asset", "result"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const exchangeRateHorizonCalls = new client.Counter({
+  name: "exchange_rate_horizon_calls_total",
+  help: "Total number of Horizon API calls made by the exchange rate service",
+  labelNames: ["operation", "status"], // operation: strict_receive_paths, load_account; status: success, error
+});
+
+export const exchangeRateSourceAccountValidation = new client.Counter({
+  name: "exchange_rate_source_account_validation_total",
+  help: "Total number of source account validations",
+  labelNames: ["result"], // valid, not_found, error, skipped
+});
+
+export const exchangeRateSlippageApplied = new client.Counter({
+  name: "exchange_rate_slippage_applied_total",
+  help: "Total number of exchange rate quotes with slippage applied",
+  labelNames: ["slippage_pct"],
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -230,5 +265,10 @@ register.registerMetric(queryCacheSize);
 register.registerMetric(dbPoolerRateLimitExceeded);
 register.registerMetric(dbPoolerQueryTotal);
 register.registerMetric(dbPoolerSignatureVerified);
+register.registerMetric(exchangeRateQuoteRequests);
+register.registerMetric(exchangeRateQuoteDuration);
+register.registerMetric(exchangeRateHorizonCalls);
+register.registerMetric(exchangeRateSourceAccountValidation);
+register.registerMetric(exchangeRateSlippageApplied);
 
 export { register };
