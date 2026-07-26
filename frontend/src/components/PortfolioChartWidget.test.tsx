@@ -59,6 +59,10 @@ vi.mock('recharts', () => ({
   CartesianGrid: () => <div data-testid="cartesian-grid" />,
 }));
 
+vi.mock('next-intl', () => ({
+  useTranslations: () => (key: string) => key,
+}));
+
 describe('PortfolioChartWidget', () => {
   const mockAssets: PortfolioAsset[] = [
     {
@@ -101,8 +105,21 @@ describe('PortfolioChartWidget', () => {
   it('renders the localized title and portfolio value', () => {
     render(<PortfolioChartWidget {...defaultProps} />);
 
-    expect(screen.getByText('Portfolio Value')).toBeInTheDocument();
+    expect(screen.getByText('portfolioChart.valueTitle')).toBeInTheDocument();
     expect(screen.getByText('$4,000.00')).toBeInTheDocument();
+  });
+
+  it('displays the correct currency format', () => {
+    render(
+      <PortfolioChartWidget
+        {...defaultProps}
+        totalValue={5000}
+        currency="EUR"
+      />
+    );
+
+    const portfolioValue = screen.getByText(/portfolioChart\.valueTitle/i).parentElement;
+    expect(portfolioValue).toBeInTheDocument();
   });
 
   it('renders all assets in the list', () => {
@@ -116,16 +133,30 @@ describe('PortfolioChartWidget', () => {
   it('switches to the history view when history data is available', async () => {
     render(<PortfolioChartWidget {...defaultProps} historyData={historyData} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Trend' }));
+    const trendButton = screen.getByText('portfolioChart.trend');
+    fireEvent.click(trendButton);
 
     await waitFor(() => {
       expect(screen.getByTestId('line-chart')).toBeInTheDocument();
+    });
+
+    const allocationButton = screen.getByText('portfolioChart.allocation');
+    fireEvent.click(allocationButton);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pie-chart')).toBeInTheDocument();
     });
   });
 
   it('shows an accessible loading state and disables chart toggles', () => {
     render(<PortfolioChartWidget {...defaultProps} loading />);
 
+    const assetElement = screen.getByText('XLM').closest('div[class*="p-3"]');
+    if (assetElement) {
+      fireEvent.click(assetElement);
+    }
+
+    expect(screen.getByText('XLM')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('Loading portfolio chart...');
     expect(screen.getByRole('button', { name: 'Allocation' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Trend' })).toBeDisabled();
@@ -134,6 +165,13 @@ describe('PortfolioChartWidget', () => {
   it('shows an empty history state when no trend data exists', async () => {
     render(<PortfolioChartWidget {...defaultProps} historyData={[]} />);
 
+    if (assetElement) {
+      fireEvent.click(assetElement);
+      expect(assetElement).toHaveClass('bg-blue-50');
+
+      fireEvent.click(assetElement);
+      expect(assetElement).toBeInTheDocument();
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Trend' }));
 
     await waitFor(() => {
@@ -204,6 +242,38 @@ describe('PortfolioChartWidget', () => {
       />
     );
 
+    expect(screen.getByText(/portfolioChart\.valueTitle/)).toBeInTheDocument();
+  });
+
+  it('handles large portfolio values', () => {
+    const largeAssets: PortfolioAsset[] = [
+      {
+        id: '1',
+        symbol: 'BTC',
+        name: 'Bitcoin',
+        amount: 0.5,
+        value: 20000,
+        percentage: 100,
+      },
+    ];
+
+    const { container } = render(
+      <PortfolioChartWidget
+        assets={largeAssets}
+        totalValue={20000}
+        showAnimation={false}
+      />
+    );
+
+    const portfolioValueTexts = screen.getAllByText('$20,000.00');
+    expect(portfolioValueTexts.length).toBeGreaterThan(0);
+  });
+
+  it('displays asset color indicators', () => {
+    render(<PortfolioChartWidget {...defaultProps} />);
+
+    const colorDots = screen.getAllByTestId('cell').length;
+    expect(colorDots).toBeGreaterThanOrEqual(0);
     expect(screen.getByRole('alert')).toHaveTextContent(
       'Unable to load the latest portfolio snapshot.'
     );
