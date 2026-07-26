@@ -7,6 +7,93 @@
   to   { transform: translateX(200%); }
 }
 
+/* ── KYC / Shimmer loading animations ─────────────────────────────────────── */
+
+@keyframes shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+@keyframes kyc-pulse-ring {
+  0%   { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 111, 165, 0.45); }
+  70%  { transform: scale(1);    box-shadow: 0 0 0 10px rgba(74, 111, 165, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(74, 111, 165, 0); }
+}
+
+@keyframes kyc-step-fill {
+  from { width: 0%; }
+  to   { width: var(--kyc-step-width, 100%); }
+}
+
+@keyframes kyc-success-scale {
+  0%   { transform: scale(0) rotate(-10deg); opacity: 0; }
+  60%  { transform: scale(1.12) rotate(3deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes kyc-bounce-in {
+  0%   { transform: translateY(12px); opacity: 0; }
+  60%  { transform: translateY(-4px); opacity: 1; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+/* Utility classes consumed by KycSubmissionForm and skeleton components */
+.kyc-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--pluto-100) 25%,
+    var(--pluto-50)  50%,
+    var(--pluto-100) 75%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+.dark .kyc-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(26, 47, 74, 0.7)  25%,
+    rgba(45, 74, 122, 0.35) 50%,
+    rgba(26, 47, 74, 0.7)  75%
+  );
+  background-size: 400% 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kyc-shimmer {
+    animation: none;
+    background: var(--pluto-100);
+  }
+  .dark .kyc-shimmer {
+    background: rgba(26, 47, 74, 0.5);
+  }
+}
+
+.kyc-pulse-ring {
+  animation: kyc-pulse-ring 1.8s ease-out infinite;
+}
+
+.kyc-step-fill {
+  animation: kyc-step-fill 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.kyc-success-icon {
+  animation: kyc-success-scale 0.55s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.kyc-bounce-in {
+  animation: kyc-bounce-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kyc-pulse-ring,
+  .kyc-step-fill,
+  .kyc-success-icon,
+  .kyc-bounce-in {
+    animation: none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
