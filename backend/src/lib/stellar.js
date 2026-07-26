@@ -2,6 +2,10 @@ import "dotenv/config";
 import * as StellarSdk from "stellar-sdk";
 import { logger } from "./logger.js";
 import {
+  exchangeRateQuoteRequests,
+  exchangeRateQuoteDuration,
+  exchangeRateHorizonCalls,
+  exchangeRateSourceAccountValidation,
   signatureVerificationTotal,
   signatureVerificationDuration,
   signatureVerificationReplayAttempts,
@@ -417,15 +421,28 @@ export async function findStrictReceivePaths({
   sourceAssetCode,
   sourceAssetIssuer,
 }) {
+  const startTime = Date.now();
   const destAsset = resolveAsset(destAssetCode, destAssetIssuer);
   const sourceAsset = resolveAsset(sourceAssetCode, sourceAssetIssuer);
+  const assetLabels = {
+    source_asset: sourceAssetCode || "native",
+    dest_asset: destAssetCode || "native",
+  };
 
   try {
     if (sourceAccount) {
-      await withHorizonRetry(
-        () => server.loadAccount(sourceAccount),
-        `source account ${sourceAccount}`,
-      );
+      try {
+        await withHorizonRetry(
+          () => server.loadAccount(sourceAccount),
+          `source account ${sourceAccount}`,
+        );
+        exchangeRateSourceAccountValidation.inc({ result: "valid" });
+      } catch (accountErr) {
+        exchangeRateSourceAccountValidation.inc({ result: "not_found" });
+        throw accountErr;
+      }
+    } else {
+      exchangeRateSourceAccountValidation.inc({ result: "skipped" });
     }
 
     const result = await withHorizonRetry(
@@ -435,8 +452,14 @@ export async function findStrictReceivePaths({
           .call(),
       "strict-receive-paths",
     );
+    exchangeRateHorizonCalls.inc({ operation: "strict_receive_paths", status: "success" });
 
     if (!result.records || result.records.length === 0) {
+      exchangeRateQuoteRequests.inc({ ...assetLabels, result: "not_found" });
+      exchangeRateQuoteDuration.observe(
+        { ...assetLabels, result: "not_found" },
+        (Date.now() - startTime) / 1000,
+      );
       return null;
     }
 
@@ -448,6 +471,12 @@ export async function findStrictReceivePaths({
       error.status = 502;
       throw error;
     }
+
+    exchangeRateQuoteRequests.inc({ ...assetLabels, result: "success" });
+    exchangeRateQuoteDuration.observe(
+      { ...assetLabels, result: "success" },
+      (Date.now() - startTime) / 1000,
+    );
 
     return {
       source_amount: best.source_amount,
@@ -461,10 +490,19 @@ export async function findStrictReceivePaths({
       })),
     };
   } catch (err) {
-    if (err?.status) {
-      throw err;
+    exchangeRateQuoteRequests.inc({ ...assetLabels, result: "error" });
+    exchangeRateQuoteDuration.observe(
+      { ...assetLabels, result: "error" },
+      (Date.now() - startTime) / 1000,
+    );
+
+    exchangeRateHorizonCalls.inc({ operation: "strict_receive_paths", status: "error" });
+
+    if (!err?.status) {
+      throw handleHorizonError(err, "strict-receive-paths");
     }
-    throw handleHorizonError(err, "strict-receive-paths");
+
+    throw err;
   }
 }
 

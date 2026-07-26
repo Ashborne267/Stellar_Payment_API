@@ -574,32 +574,41 @@
     "successDescription": "Tu verificacion KYC ha sido enviada y esta en revision.",
     "dash": "—"
   },
-  "onboarding": {
-    "title": "Progreso de incorporacion",
-    "subtitle": "Completa todos los pasos obligatorios para finalizar la configuracion",
-    "progressBar": "Progreso general de incorporacion",
-    "stepsList": "Pasos de incorporacion",
-    "progressTracker": "Seguimiento del progreso de incorporacion",
-    "stepsCompleted": "{completed} de {total} pasos completados",
-    "percentComplete": "{percent}% completado",
-    "allCompleted": "Completado!",
-    "successTitle": "Incorporacion completa!",
-    "successMessage": "Has completado exitosamente todos los pasos obligatorios de incorporacion.",
-    "completed": "Completado",
-    "inProgress": "En progreso",
-    "pending": "Pendiente",
-    "required": "Obligatorio",
-    "optional": "Opcional",
-    "stepProgress": "Paso",
-    "updating": "Actualizando paso\u2026",
-    "stepChangeFailed": "Error al cambiar el paso. Intentalo de nuevo.",
-    "stepLabel": "Paso {number}: {title}",
-    "stepLabelCompleted": "Paso {number}: {title}. Completado",
-    "stepLabelRequired": "Paso {number}: {title}. Obligatorio",
-    "stepLabelCompletedRequired": "Paso {number}: {title}. Completado. Obligatorio",
-    "stepAnnouncement": "Paso {number} de {total}: {title}. {description}. {status}.",
-    "progress": "Progreso",
-    "progressAnnouncement": "Progreso: {percent}% completado"
+  "darkModeTheme": {
+    "loading": "Cargando configuracion del tema",
+    "errorCleared": "Error eliminado. Intentando cambiar el tema.",
+    "switchingTo": "Cambiando al tema {theme}.",
+    "themeChanged": "Tema cambiado a {theme}.",
+    "themeError": "Error al cambiar el tema. Intentalo de nuevo.",
+    "currentTheme": "Tema actual: {theme}",
+    "systemTheme": "Sistema ({theme})",
+    "ariaError": "Cambio de tema con error — presiona para reintentar",
+    "ariaLabel": "Cambio de tema, tema actual: {theme}. Presiona para pasar al siguiente tema.",
+    "ariaLoading": "El tema esta cargando",
+    "errorTitle": "Error de tema: {error}. Presiona para reintentar.",
+    "titleSystem": "Tema: Sistema ({theme})",
+    "titleLight": "Tema: Claro",
+    "titleDark": "Tema: Oscuro",
+    "description": "Cambia entre los temas claro, oscuro y del sistema. El sistema sigue la preferencia del dispositivo. Presiona Espacio o Intro para activar.",
+    "preferenceLabel": "Preferencia de tema",
+    "preferenceSaved": "Preferencia de tema guardada",
+    "preferenceRestored": "Preferencia de tema restaurada",
+    "themes": {
+      "light": "claro",
+      "dark": "oscuro",
+      "system": "sistema"
+    },
+    "themeNames": {
+      "light": "Claro",
+      "dark": "Oscuro",
+      "system": "Sistema"
+    },
+    "sr": {
+      "sunIcon": "Icono de sol — modo claro activo",
+      "moonIcon": "Icono de luna — modo oscuro activo",
+      "systemIcon": "Icono de monitor — tema del sistema activo",
+      "errorIcon": "Icono de error — no se pudo aplicar el tema"
+    }
   },
   "portfolioChartWidget": {
     "title": "Valor del portafolio",
