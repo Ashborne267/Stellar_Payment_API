@@ -3,15 +3,15 @@
 /**
  * OnboardingProgressTracker
  *
- * Refactored for:
- * - Full i18n via the "onboarding" next-intl namespace
- * - Dark mode support via .dark CSS variable overrides and Tailwind dark: variants
- * - Mobile-first responsive layout (vertical default → horizontal on sm+)
- * - Improved accessibility: ARIA live regions, aria-current, aria-busy,
- *   aria-setsize/aria-posinset, aria-roledescription, focus-visible rings
- * - Optimistic step navigation with rollback (via useOnboardingProgress)
- * - prefers-reduced-motion respected for all framer-motion animations
- * - StepIcon sub-component for clean icon rendering
+ * Refactored for full i18n support via the "onboarding" next-intl namespace.
+ *
+ * Additional improvements:
+ * - All user-visible strings sourced from useOnboardingI18n (no hardcoded English)
+ * - Dark mode: dark: Tailwind variants on every surface, border, text, gradient
+ * - Mobile-first responsive layout (vertical default, horizontal on sm+)
+ * - Improved a11y: translated aria-labels, aria-busy spinner, focus-visible rings
+ * - StepIcon and StatusBadge extracted as memoised sub-components
+ * - prefers-reduced-motion respected throughout
  * - Connector lines between vertical steps
  */
 
@@ -22,13 +22,13 @@ import {
   useReducedMotion,
   type Variants,
 } from "framer-motion";
-import { useTranslations } from "next-intl";
 import {
   useOnboardingProgress,
   type OnboardingStep,
 } from "@/hooks/useOnboardingProgress";
+import { useOnboardingI18n } from "@/hooks/useOnboardingI18n";
 
-// ── Re-export types so consumers only need one import ─────────────────────────
+// ── Re-export so consumers need only one import ───────────────────────────────
 export type { OnboardingStep };
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -38,13 +38,13 @@ export interface OnboardingProgressTrackerProps {
   currentStep?: string;
   onStepChange?: (stepId: string) => void | Promise<void>;
   onComplete?: () => void;
-  /** Show numeric labels inside the step indicator circles. Default: true. */
+  /** Show numeric labels inside step circles. Default: true. */
   showStepNumbers?: boolean;
   /** Stack direction. Default: "vertical". */
   orientation?: "vertical" | "horizontal";
-  /** Compact padding variant. Default: false. */
+  /** Reduced padding variant. Default: false. */
   compact?: boolean;
-  /** Optional extra className on the root wrapper. */
+  /** Extra className on the root wrapper. */
   className?: string;
 }
 
@@ -61,7 +61,7 @@ const containerVariants: Variants = {
 const stepVariants: Variants = {
   hidden: { opacity: 0, x: -16 },
   visible: { opacity: 1, x: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] } },
-  exit:   { opacity: 0, x: 16,  transition: { duration: 0.2 } },
+  exit:   { opacity: 0, x: 16, transition: { duration: 0.2 } },
 };
 
 const stepVariantsReduced: Variants = {
@@ -105,12 +105,12 @@ const completionVariantsReduced: Variants = {
   exit:   { opacity: 0, transition: { duration: 0.1 } },
 };
 
-// ── StepIcon sub-component ────────────────────────────────────────────────────
+// ── StepIcon ──────────────────────────────────────────────────────────────────
 
 interface StepIconProps {
   completed: boolean;
-  isCurrent: boolean;
   isPending: boolean;
+  isCurrent: boolean;
   number: number;
   showNumber: boolean;
   compact: boolean;
@@ -120,27 +120,24 @@ interface StepIconProps {
 
 const StepIcon = memo(function StepIcon({
   completed,
-  isCurrent,
   isPending,
+  isCurrent,
   number,
   showNumber,
   compact,
   checkVariants,
   prefersReducedMotion,
 }: StepIconProps) {
-  const size = compact ? "h-8 w-8" : "h-10 w-10";
-
   return (
     <AnimatePresence mode="wait">
       {completed ? (
         <motion.span
           key="check"
-          className={`absolute inset-0 flex items-center justify-center ${size}`}
+          className="absolute inset-0 flex items-center justify-center"
           variants={checkVariants}
           initial="hidden"
           animate="visible"
         >
-          {/* Checkmark icon */}
           <svg
             className={compact ? "h-4 w-4" : "h-5 w-5"}
             fill="currentColor"
@@ -162,7 +159,7 @@ const StepIcon = memo(function StepIcon({
           transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
         >
           <svg
-            className={`${compact ? "h-4 w-4" : "h-5 w-5"} text-pluto-500`}
+            className={`${compact ? "h-4 w-4" : "h-5 w-5"} text-pluto-500 dark:text-pluto-300`}
             fill="none"
             viewBox="0 0 24 24"
             aria-hidden="true"
@@ -183,9 +180,13 @@ const StepIcon = memo(function StepIcon({
       ) : (
         <motion.span
           key="number"
-          className={`absolute inset-0 flex items-center justify-center ${
+          className={`absolute inset-0 flex items-center justify-center font-semibold ${
             compact ? "text-xs" : "text-sm"
-          } font-semibold ${isCurrent ? "text-pluto-700 dark:text-pluto-300" : "text-pluto-600 dark:text-pluto-400"}`}
+          } ${
+            isCurrent
+              ? "text-pluto-700 dark:text-pluto-300"
+              : "text-pluto-600 dark:text-pluto-400"
+          }`}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           aria-hidden="true"
@@ -197,7 +198,7 @@ const StepIcon = memo(function StepIcon({
   );
 });
 
-// ── Status badge sub-component ────────────────────────────────────────────────
+// ── StatusBadge ───────────────────────────────────────────────────────────────
 
 interface StatusBadgeProps {
   completed: boolean;
@@ -218,7 +219,11 @@ const StatusBadge = memo(function StatusBadge({
   pendingLabel,
   prefersReducedMotion,
 }: StatusBadgeProps) {
-  const label = completed ? completedLabel : isCurrent ? inProgressLabel : pendingLabel;
+  const label = completed
+    ? completedLabel
+    : isCurrent
+      ? inProgressLabel
+      : pendingLabel;
 
   const colorClass = completed
     ? "bg-pluto-100 text-pluto-800 dark:bg-pluto-900/40 dark:text-pluto-200"
@@ -253,7 +258,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
   compact = false,
   className = "",
 }: OnboardingProgressTrackerProps) {
-  const t = useTranslations("onboarding");
+  const i18n = useOnboardingI18n();
   const prefersReducedMotion = useReducedMotion();
 
   const {
@@ -268,40 +273,26 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
   } = useOnboardingProgress({ steps, currentStep, onStepChange, onComplete });
 
   // Pick motion variants based on reduced-motion preference
-  const activeStepVariants       = prefersReducedMotion ? stepVariantsReduced       : stepVariants;
+  const activeStepVariants        = prefersReducedMotion ? stepVariantsReduced        : stepVariants;
   const activeProgressBarVariants = prefersReducedMotion ? progressBarVariantsReduced : progressBarVariants;
-  const activeCheckMarkVariants  = prefersReducedMotion ? checkMarkVariantsReduced  : checkMarkVariants;
-  const activeCompletionVariants = prefersReducedMotion ? completionVariantsReduced : completionVariants;
-
-  // Translated step aria-label builder
-  const buildStepAriaLabel = (step: OnboardingStep, index: number): string => {
-    if (step.completed && step.required) {
-      return t("stepLabelCompletedRequired", { number: index + 1, title: step.title });
-    }
-    if (step.completed) {
-      return t("stepLabelCompleted", { number: index + 1, title: step.title });
-    }
-    if (step.required) {
-      return t("stepLabelRequired", { number: index + 1, title: step.title });
-    }
-    return t("stepLabel", { number: index + 1, title: step.title });
-  };
+  const activeCheckMarkVariants   = prefersReducedMotion ? checkMarkVariantsReduced   : checkMarkVariants;
+  const activeCompletionVariants  = prefersReducedMotion ? completionVariantsReduced  : completionVariants;
 
   return (
     <div
       className={`w-full ${className}`}
       role="region"
-      aria-label={t("progressTracker")}
+      aria-label={i18n.progressTracker}
       aria-live="polite"
       aria-atomic="false"
     >
-      {/* Hidden progress summary for AT */}
+      {/* sr-only progress summary */}
       <p id={progressSummaryId} className="sr-only">
-        {t("stepsCompleted", { completed: completedCount, total: sortedSteps.length })}{" "}
-        {t("percentComplete", { percent: progressPercent })}
+        {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}{" "}
+        {i18n.percentCompleteLabel(progressPercent)}
       </p>
 
-      {/* Screen-reader live announcement region */}
+      {/* Assertive live region for step-change announcements */}
       <div
         className="sr-only"
         role="status"
@@ -312,10 +303,10 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
         {state.announcementText}
       </div>
 
-      {/* Pending spinner announcement */}
+      {/* Polite pending indicator */}
       {state.isPending && (
         <div className="sr-only" aria-live="polite" aria-atomic="true">
-          {t("updating")}
+          {i18n.updating}
         </div>
       )}
 
@@ -340,18 +331,18 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                 compact ? "text-base" : "text-lg"
               }`}
             >
-              {t("title")}
+              {i18n.title}
             </h2>
             <span
-              className="shrink-0 text-sm font-semibold tabular-nums text-pluto-600 dark:text-pluto-300"
+              className="shrink-0 tabular-nums text-sm font-semibold text-pluto-600 dark:text-pluto-300"
               aria-hidden="true"
             >
-              {t("percentComplete", { percent: progressPercent })}
+              {i18n.percentCompleteLabel(progressPercent)}
             </span>
           </div>
 
           <p className={`mt-1 text-[#6B6B6B] dark:text-pluto-400 ${compact ? "text-xs" : "text-sm"}`}>
-            {t("subtitle")}
+            {i18n.subtitle}
           </p>
 
           {/* Progress bar */}
@@ -361,7 +352,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
             aria-valuenow={progressPercent}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t("progressBar")}
+            aria-label={i18n.progressBar}
             aria-describedby={progressSummaryId}
           >
             <motion.div
@@ -374,17 +365,12 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
             />
           </div>
 
-          {/* Step count summary */}
+          {/* Step count summary line */}
           <p
             className="mt-1.5 flex items-center gap-1.5 text-xs text-[#6B6B6B] dark:text-pluto-400"
             aria-hidden="true"
           >
-            <span>
-              {t("stepsCompleted", {
-                completed: completedCount,
-                total: sortedSteps.length,
-              })}
-            </span>
+            {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
             {isComplete && (
               <span className="inline-flex items-center gap-1 font-semibold text-pluto-600 dark:text-pluto-300">
                 <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
@@ -394,7 +380,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                     clipRule="evenodd"
                   />
                 </svg>
-                {t("allCompleted")}
+                {i18n.allCompleted}
               </span>
             )}
           </p>
@@ -408,7 +394,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
               : "flex flex-col gap-1"
           }
           role="list"
-          aria-label={t("stepsList")}
+          aria-label={i18n.stepsList}
           aria-orientation={orientation}
           variants={containerVariants}
           initial="hidden"
@@ -416,15 +402,15 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
         >
           <AnimatePresence mode="popLayout">
             {sortedSteps.map((step, index) => {
-              const isCurrent  = effectiveCurrentStep === step.id;
-              const isPending  = state.isPending && isCurrent;
+              const isCurrent = effectiveCurrentStep === step.id;
+              const isPending = state.isPending && isCurrent;
               const stepDescId = `${progressSummaryId}-desc-${index}`;
 
-              const indicatorColor = step.completed
+              const indicatorColorClass = step.completed
                 ? "border-pluto-500 bg-pluto-100 text-pluto-800 shadow-[0_4px_12px_rgba(74,111,165,0.18)] dark:border-pluto-400 dark:bg-pluto-800/60 dark:text-pluto-100"
                 : isCurrent
                   ? "border-pluto-600 bg-pluto-50 text-pluto-700 shadow-[0_4px_12px_rgba(74,111,165,0.14)] dark:border-pluto-400 dark:bg-pluto-900/60 dark:text-pluto-200"
-                  : "border-pluto-200 bg-white text-pluto-600 dark:border-pluto-700 dark:bg-pluto-900/40 dark:text-pluto-400 group-hover:border-pluto-400 group-hover:bg-pluto-50 group-hover:shadow-[0_4px_12px_rgba(13,27,46,0.08)] dark:group-hover:border-pluto-500 dark:group-hover:bg-pluto-800/50";
+                  : "border-pluto-200 bg-white text-pluto-600 dark:border-pluto-700 dark:bg-pluto-900/40 dark:text-pluto-400 group-hover:border-pluto-400 group-hover:bg-pluto-50 dark:group-hover:border-pluto-500 dark:group-hover:bg-pluto-800/50";
 
               return (
                 <motion.li
@@ -438,7 +424,9 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                     hover:border-pluto-100 hover:bg-white/80
                     dark:hover:border-pluto-800/60 dark:hover:bg-pluto-900/50
                     focus-within:border-pluto-200 dark:focus-within:border-pluto-700
-                    ${orientation === "horizontal" ? "flex flex-1 flex-col gap-2 sm:items-center" : "flex flex-row gap-3"}
+                    ${orientation === "horizontal"
+                      ? "flex flex-1 flex-col gap-2"
+                      : "flex flex-row gap-3"}
                   `}
                   animate={
                     isCurrent && !prefersReducedMotion
@@ -458,10 +446,15 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       transition-all duration-200
                       focus:outline-none focus-visible:ring-2
                       focus-visible:ring-pluto-400 focus-visible:ring-offset-2
-                      focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-900
-                      ${indicatorColor}
+                      focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-950
+                      ${indicatorColorClass}
                     `}
-                    aria-label={buildStepAriaLabel(step, index)}
+                    aria-label={i18n.stepAriaLabel(
+                      index + 1,
+                      step.title,
+                      step.completed,
+                      step.required,
+                    )}
                     aria-pressed={isCurrent}
                     aria-current={isCurrent ? "step" : undefined}
                     aria-setsize={sortedSteps.length}
@@ -474,8 +467,8 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   >
                     <StepIcon
                       completed={step.completed}
-                      isCurrent={isCurrent}
                       isPending={isPending}
+                      isCurrent={isCurrent}
                       number={index + 1}
                       showNumber={showStepNumbers}
                       compact={compact}
@@ -484,13 +477,12 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                     />
                   </button>
 
-                  {/* Step content */}
+                  {/* Step text content */}
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <h3
                       id={stepDescId}
                       className={`
-                        font-medium leading-tight
-                        transition-colors duration-200
+                        font-medium leading-tight transition-colors duration-200
                         ${step.completed
                           ? "text-pluto-600 line-through dark:text-pluto-400"
                           : "text-pluto-900 dark:text-pluto-50 group-hover:text-pluto-800 dark:group-hover:text-white"}
@@ -501,8 +493,8 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       {step.required && (
                         <span
                           className="ml-1 text-red-500 dark:text-red-400"
-                          aria-label={t("required")}
-                          title={t("required")}
+                          aria-label={i18n.required}
+                          title={i18n.required}
                         >
                           *
                         </span>
@@ -521,9 +513,9 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       completed={step.completed}
                       isCurrent={isCurrent}
                       compact={compact}
-                      completedLabel={t("completed")}
-                      inProgressLabel={t("inProgress")}
-                      pendingLabel={t("pending")}
+                      completedLabel={i18n.completed}
+                      inProgressLabel={i18n.inProgress}
+                      pendingLabel={i18n.pending}
                       prefersReducedMotion={prefersReducedMotion}
                     />
                   </div>
@@ -532,7 +524,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   {orientation === "vertical" && index < sortedSteps.length - 1 && (
                     <div
                       className={`
-                        absolute left-[1.4375rem] top-[calc(100%_-_4px)]
+                        absolute left-[1.4375rem] top-[calc(100%-4px)]
                         ${compact ? "h-2 w-px" : "h-3 w-px"}
                         bg-pluto-200 dark:bg-pluto-700
                       `}
@@ -576,10 +568,10 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                 </motion.svg>
                 <div>
                   <h4 className="font-semibold text-pluto-900 dark:text-pluto-50">
-                    {t("successTitle")}
+                    {i18n.successTitle}
                   </h4>
                   <p className="mt-0.5 text-sm text-pluto-700 dark:text-pluto-300">
-                    {t("successMessage")}
+                    {i18n.successMessage}
                   </p>
                 </div>
               </div>

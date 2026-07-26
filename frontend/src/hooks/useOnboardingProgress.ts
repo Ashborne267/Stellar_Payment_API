@@ -6,9 +6,10 @@
  *
  * Responsibilities:
  * - Owns the useReducer instance and exposes read-only derived values.
+ * - Syncs external prop changes (steps array) into the reducer via SYNC_STEPS.
+ * - Syncs external currentStep prop changes via SET_CURRENT_STEP.
  * - Handles optimistic step navigation with async callback + rollback.
- * - Syncs external prop changes (steps array) into reducer via SYNC_STEPS.
- * - Produces translated screen-reader announcement strings.
+ * - Produces translated screen-reader announcement strings via useOnboardingI18n.
  * - Fires onComplete when all required steps are done.
  */
 
@@ -22,7 +23,6 @@ import {
   useReducer,
   useRef,
 } from "react";
-import { useTranslations } from "next-intl";
 import {
   onboardingReducer,
   createInitialOnboardingState,
@@ -30,8 +30,9 @@ import {
   selectProgressPercent,
   type OnboardingState,
 } from "@/components/onboarding-reducer";
+import { useOnboardingI18n } from "@/hooks/useOnboardingI18n";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Shared step type (re-exported for consumers) ──────────────────────────────
 
 export interface OnboardingStep {
   id: string;
@@ -42,6 +43,8 @@ export interface OnboardingStep {
   order: number;
 }
 
+// ── Options / return types ────────────────────────────────────────────────────
+
 export interface UseOnboardingProgressOptions {
   steps: OnboardingStep[];
   currentStep?: string;
@@ -50,21 +53,13 @@ export interface UseOnboardingProgressOptions {
 }
 
 export interface UseOnboardingProgressReturn {
-  /** Steps sorted by `order`. */
   sortedSteps: OnboardingStep[];
-  /** The step id currently treated as active (optimistic-aware). */
   effectiveCurrentStep: string | undefined;
-  /** Reducer state snapshot — read-only. */
   state: OnboardingState;
-  /** 0–100 progress percentage. */
   progressPercent: number;
-  /** Number of completed steps. */
   completedCount: number;
-  /** True when all required steps are completed. */
   isComplete: boolean;
-  /** Stable id for the sr-only progress summary element. */
   progressSummaryId: string;
-  /** Handle a step button click with optimistic update + rollback. */
   handleStepClick: (stepId: string) => Promise<void>;
 }
 
@@ -76,7 +71,7 @@ export function useOnboardingProgress({
   onStepChange,
   onComplete,
 }: UseOnboardingProgressOptions): UseOnboardingProgressReturn {
-  const t = useTranslations("onboarding");
+  const i18n = useOnboardingI18n();
   const progressSummaryId = useId();
 
   // ── Derived step data ────────────────────────────────────────────────────
@@ -107,7 +102,7 @@ export function useOnboardingProgress({
     ),
   );
 
-  // Keep derived counts in sync when the steps prop changes.
+  // Sync step counts when the steps prop changes
   useEffect(() => {
     dispatch({
       type: "SYNC_STEPS",
@@ -115,15 +110,15 @@ export function useOnboardingProgress({
     });
   }, [sortedSteps.length, completedCount]);
 
-  // Sync external currentStep prop changes (e.g. parent navigates).
-  const prevCurrentStepProp = useRef(currentStepProp);
+  // Sync external currentStep prop
+  const prevCurrentStepPropRef = useRef(currentStepProp);
   useEffect(() => {
     if (
       currentStepProp !== undefined &&
-      currentStepProp !== prevCurrentStepProp.current
+      currentStepProp !== prevCurrentStepPropRef.current
     ) {
       dispatch({ type: "SET_CURRENT_STEP", payload: currentStepProp });
-      prevCurrentStepProp.current = currentStepProp;
+      prevCurrentStepPropRef.current = currentStepProp;
     }
   }, [currentStepProp]);
 
@@ -139,22 +134,19 @@ export function useOnboardingProgress({
 
   useEffect(() => {
     if (isComplete && sortedSteps.length > 0) {
-      dispatch({
-        type: "SET_ANNOUNCEMENT",
-        payload: t("successTitle"),
-      });
+      dispatch({ type: "SET_ANNOUNCEMENT", payload: i18n.successTitle });
       onCompleteRef.current?.();
     }
-  }, [isComplete, sortedSteps.length, t]);
+  }, [isComplete, sortedSteps.length, i18n.successTitle]);
 
   // ── Progress announcements ────────────────────────────────────────────────
 
   useEffect(() => {
     dispatch({
       type: "SET_ANNOUNCEMENT",
-      payload: t("progressAnnouncement", { percent: progressPercent }),
+      payload: i18n.progressAnnouncement(progressPercent),
     });
-  }, [progressPercent, t]);
+  }, [progressPercent, i18n]);
 
   // ── Step click handler ────────────────────────────────────────────────────
 
@@ -165,24 +157,15 @@ export function useOnboardingProgress({
       const step = sortedSteps.find((s) => s.id === stepId);
       if (!step) return;
 
-      // Optimistic: reflect change immediately.
       dispatch({ type: "OPTIMISTIC_STEP", payload: stepId });
 
-      const statusKey = step.completed
-        ? "completed"
-        : effectiveCurrentStep === stepId
-          ? "inProgress"
-          : "pending";
-
+      const status = i18n.statusLabel(
+        step.completed,
+        effectiveCurrentStep === stepId,
+      );
       dispatch({
         type: "SET_ANNOUNCEMENT",
-        payload: t("stepAnnouncement", {
-          number: step.order,
-          total: sortedSteps.length,
-          title: step.title,
-          description: step.description,
-          status: t(statusKey),
-        }),
+        payload: i18n.stepAnnouncement(step, sortedSteps.length, status),
       });
 
       try {
@@ -192,11 +175,11 @@ export function useOnboardingProgress({
         dispatch({ type: "ROLLBACK_STEP" });
         dispatch({
           type: "SET_ANNOUNCEMENT",
-          payload: t("stepChangeFailed"),
+          payload: i18n.stepChangeFailed,
         });
       }
     },
-    [sortedSteps, effectiveCurrentStep, onStepChange, state.isPending, t],
+    [sortedSteps, effectiveCurrentStep, onStepChange, state.isPending, i18n],
   );
 
   return {

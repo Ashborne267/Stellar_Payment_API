@@ -1,14 +1,14 @@
 import RegistrationForm from "@/components/RegistrationForm";
 import Link from "next/link";
 import GuestGuard from "@/components/GuestGuard";
-import { OnboardingProgressTracker } from "@/components/OnboardingProgressTracker";
+import { OnboardingProgressTracker, type OnboardingStep } from "@/components/OnboardingProgressTracker";
 
 /**
- * Demo steps shown on the registration page so users understand what the
- * onboarding journey looks like before they submit the form.
- * Marked as a server-side constant — no runtime cost.
+ * Demo steps shown on the registration page so users understand the full
+ * onboarding journey before they submit the form.
+ * Defined as a server-side constant — zero runtime cost.
  */
-const ONBOARDING_STEPS = [
+const ONBOARDING_STEPS: OnboardingStep[] = [
   {
     id: "create-account",
     title: "Create your account",
@@ -36,7 +36,7 @@ const ONBOARDING_STEPS = [
   {
     id: "webhook",
     title: "Configure a webhook",
-    description: "Point PLUTO at your server to receive real-time events.",
+    description: "Point PLUTO at your server to receive real-time payment events.",
     completed: false,
     required: false,
     order: 4,
@@ -49,12 +49,13 @@ const ONBOARDING_STEPS = [
     required: false,
     order: 5,
   },
-] as const;
+];
 
 export default function RegisterPage() {
   return (
     <GuestGuard>
       <main className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center gap-10 bg-white dark:bg-[#0a0a0a] px-6 py-14 md:py-20">
+
         {/* ── Page header ─────────────────────────────────────────────────── */}
         <header className="flex flex-col gap-6 text-center">
           <p className="font-bold text-xs uppercase tracking-[0.4em] text-[#6B6B6B] dark:text-pluto-400 motion-safe:animate-pulse">
@@ -71,11 +72,11 @@ export default function RegisterPage() {
 
         {/* ── Onboarding Progress Tracker ──────────────────────────────────── */}
         <OnboardingProgressTracker
-          steps={ONBOARDING_STEPS as unknown as Parameters<typeof OnboardingProgressTracker>[0]["steps"]}
+          steps={ONBOARDING_STEPS}
           currentStep="create-account"
-          compact={false}
           orientation="vertical"
           showStepNumbers
+          compact={false}
         />
 
         {/* ── Registration form ────────────────────────────────────────────── */}
@@ -89,12 +90,13 @@ export default function RegisterPage() {
             Already have an account?{" "}
             <Link
               href="/login"
-              className="font-bold text-[#0A0A0A] dark:text-white underline underline-offset-8 decoration-[#B8D4E8] transition-colors duration-200 hover:text-pluto-600 focus-visible:text-pluto-700 dark:hover:text-pluto-300 dark:focus-visible:text-pluto-200"
+              className="font-bold text-[#0A0A0A] dark:text-white underline underline-offset-8 decoration-[#B8D4E8] transition-colors duration-200 hover:text-pluto-600 dark:hover:text-pluto-300 focus-visible:text-pluto-700 dark:focus-visible:text-pluto-200"
             >
               Log in here
             </Link>
           </p>
         </footer>
+
       </main>
     </GuestGuard>
   );

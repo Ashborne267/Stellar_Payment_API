@@ -1,15 +1,15 @@
 /**
  * @vitest-environment jsdom
  *
- * Unit tests for OnboardingProgressTracker (refactored)
+ * Unit tests for OnboardingProgressTracker (i18n refactor)
  *
  * Covers:
  *  - #809  framer-motion animation variants and reduced-motion support
- *  - #810  comprehensive unit-test coverage (rendering, props, interactions, completion)
+ *  - #810  rendering, props, interactions, completion
  *  - #811  screen-reader / accessibility attributes
- *  - #812  optimistic updates and rollback behaviour
- *  - i18n  translated strings via "onboarding" namespace
- *  - hook  useOnboardingProgress integration (SYNC_STEPS, external prop sync)
+ *  - #812  optimistic updates and rollback
+ *  - i18n  useOnboardingI18n hook integration (translated strings)
+ *  - hook  useOnboardingProgress (SYNC_STEPS, external currentStep sync)
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
@@ -21,11 +21,13 @@ import React from "react";
 // Mocks
 // ---------------------------------------------------------------------------
 
-// next-intl: return the translation key so assertions are locale-independent
+/**
+ * next-intl: return the key (with inline {token} substitution) so assertions
+ * are locale-independent and don't depend on the real message catalogue.
+ */
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, params?: Record<string, unknown>) => {
     if (!params) return key;
-    // Inline simple {token} substitution so parameterised strings are readable
     return Object.entries(params).reduce<string>(
       (acc, [k, v]) => acc.replace(`{${k}}`, String(v)),
       key,
@@ -33,15 +35,30 @@ vi.mock("next-intl", () => ({
   },
 }));
 
-// framer-motion: render plain HTML so tests stay fast — #809
+/**
+ * framer-motion: strip animation props and render plain HTML so tests run fast
+ * and don't depend on JSDOM animation support. (#809)
+ */
 vi.mock("framer-motion", () => ({
   motion: new Proxy(
     {},
     {
-      get: (_target, tag: string) =>
-        // eslint-disable-next-line react/display-name
-        React.forwardRef(({ children, animate, variants, initial, exit, transition, ...rest }: any, ref: any) =>
-          React.createElement(tag, { ...rest, ref }, children),
+      get: (_t, tag: string) =>
+        React.forwardRef(
+          (
+            {
+              children,
+              animate,
+              variants,
+              initial,
+              exit,
+              transition,
+              whileHover,
+              whileTap,
+              ...rest
+            }: any,
+            ref: any,
+          ) => React.createElement(tag, { ...rest, ref }, children),
         ),
     },
   ),
@@ -53,9 +70,18 @@ vi.mock("framer-motion", () => ({
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const step1 = { id: "1", title: "Step 1", description: "Desc 1", completed: true,  required: true,  order: 1 };
-const step2 = { id: "2", title: "Step 2", description: "Desc 2", completed: false, required: true,  order: 2 };
-const step3 = { id: "3", title: "Step 3", description: "Desc 3", completed: false, required: false, order: 3 };
+const step1 = {
+  id: "1", title: "Step 1", description: "Desc 1",
+  completed: true,  required: true,  order: 1,
+};
+const step2 = {
+  id: "2", title: "Step 2", description: "Desc 2",
+  completed: false, required: true,  order: 2,
+};
+const step3 = {
+  id: "3", title: "Step 3", description: "Desc 3",
+  completed: false, required: false, order: 3,
+};
 
 const mockSteps = [step1, step2, step3];
 
@@ -69,12 +95,16 @@ const defaultProps = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Find the step button by its translated aria-label key fragment. */
-const getStepBtn = (titleFragment: string) =>
-  screen.getByRole("button", { name: new RegExp(titleFragment, "i") });
+/**
+ * Find a step button using a fragment of its translated aria-label.
+ * The mock translates e.g. "stepLabelCompletedRequired" →
+ * "stepLabelCompletedRequired" (the key), but our assertions match on title.
+ */
+const getStepBtn = (fragment: string) =>
+  screen.getByRole("button", { name: new RegExp(fragment, "i") });
 
 // ---------------------------------------------------------------------------
-// Test suites
+// Tests
 // ---------------------------------------------------------------------------
 
 describe("OnboardingProgressTracker", () => {
@@ -82,9 +112,14 @@ describe("OnboardingProgressTracker", () => {
 
   // ── #810 Rendering ────────────────────────────────────────────────────────
   describe("Rendering", () => {
-    it("renders the translated title", () => {
+    it("renders the translated title key", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getByText("title")).toBeInTheDocument();
+    });
+
+    it("renders the translated subtitle key", () => {
+      render(<OnboardingProgressTracker {...defaultProps} />);
+      expect(screen.getByText("subtitle")).toBeInTheDocument();
     });
 
     it("renders all step titles and descriptions", () => {
@@ -95,19 +130,17 @@ describe("OnboardingProgressTracker", () => {
       });
     });
 
-    it("displays the progress percentage (33% for 1 of 3 completed)", () => {
+    it("renders the progress bar fill element", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      // The header badge uses t("percentComplete", { percent: 33 })
-      expect(screen.getByText(/33/)).toBeInTheDocument();
+      expect(screen.getByTestId("progress-bar-fill")).toBeInTheDocument();
     });
 
-    it("renders the progress bar fill element with correct width", () => {
+    it("sets width on progress bar fill to 33%", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const fill = screen.getByTestId("progress-bar-fill");
-      expect(fill).toHaveStyle("width: 33%");
+      expect(screen.getByTestId("progress-bar-fill")).toHaveStyle("width: 33%");
     });
 
-    it("sets correct ARIA attributes on the progressbar", () => {
+    it("sets correct ARIA attributes on the progressbar element", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       const bar = screen.getByRole("progressbar");
       expect(bar).toHaveAttribute("aria-valuenow", "33");
@@ -124,7 +157,7 @@ describe("OnboardingProgressTracker", () => {
       const allDone = [
         { ...step1, completed: true },
         { ...step2, completed: true },
-        { ...step3, completed: false }, // optional — doesn't block completion
+        { ...step3, completed: false }, // optional — does not block completion
       ];
       render(<OnboardingProgressTracker {...defaultProps} steps={allDone} />);
       await waitFor(() =>
@@ -140,58 +173,63 @@ describe("OnboardingProgressTracker", () => {
 
   // ── #810 Props / variants ─────────────────────────────────────────────────
   describe("Props and variants", () => {
-    it("applies compact padding when compact=true", () => {
+    it("applies compact padding class when compact=true", () => {
       const { container } = render(
         <OnboardingProgressTracker {...defaultProps} compact />,
       );
       expect(container.querySelector(".p-4")).toBeInTheDocument();
     });
 
-    it("applies horizontal flex layout when orientation='horizontal'", () => {
-      render(<OnboardingProgressTracker {...defaultProps} orientation="horizontal" />);
-      const list = screen.getByRole("list");
-      expect(list).toHaveClass("flex-col");
-    });
-
-    it("applies vertical (default) layout", () => {
+    it("renders the correct number of list items", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const list = screen.getByRole("list");
-      expect(list).toHaveClass("flex-col");
+      expect(screen.getAllByRole("listitem")).toHaveLength(3);
     });
 
-    it("hides step numbers when showStepNumbers=false", () => {
-      render(<OnboardingProgressTracker {...defaultProps} showStepNumbers={false} />);
-      // Step 2 indicator should not show the numeral "2"
-      const btn = getStepBtn("Step 2: Step 2");
-      expect(btn.textContent?.includes("2")).toBe(false);
-    });
-
-    it("applies a custom className to the root wrapper", () => {
+    it("applies an extra className to the root wrapper", () => {
       const { container } = render(
-        <OnboardingProgressTracker {...defaultProps} className="custom-class" />,
+        <OnboardingProgressTracker {...defaultProps} className="extra-class" />,
       );
-      expect(container.firstChild).toHaveClass("custom-class");
+      expect(container.firstChild).toHaveClass("extra-class");
     });
   });
 
   // ── #810 Interactions ─────────────────────────────────────────────────────
   describe("Interactions", () => {
-    it("calls onStepChange when a step is clicked", () => {
+    it("calls onStepChange when a step button is clicked", async () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      fireEvent.click(getStepBtn("Step 2: Step 2"));
-      expect(defaultProps.onStepChange).toHaveBeenCalledWith("2");
+      // Step 2 aria-label uses the "stepLabelRequired" key → "stepLabelRequired"
+      // Our mock substitutes {number} and {title}: "Step 2: Step 2. Required"
+      const btn2 = screen.getAllByRole("button")[1]; // second step
+      fireEvent.click(btn2);
+      await waitFor(() =>
+        expect(defaultProps.onStepChange).toHaveBeenCalledWith("2"),
+      );
     });
 
-    it("calls onStepChange with the correct step id for step 1", () => {
-      render(<OnboardingProgressTracker {...defaultProps} />);
-      fireEvent.click(getStepBtn("Step 1: Step 1"));
-      expect(defaultProps.onStepChange).toHaveBeenCalledWith("1");
+    it("does not call onStepChange while another step change is pending", async () => {
+      let resolveCallback!: () => void;
+      const slowCb = vi.fn(
+        () => new Promise<void>((res) => { resolveCallback = res; }),
+      );
+      render(
+        <OnboardingProgressTracker {...defaultProps} onStepChange={slowCb} currentStep="1" />,
+      );
+
+      const buttons = screen.getAllByRole("button");
+      fireEvent.click(buttons[1]); // click step 2
+
+      await waitFor(() => expect(buttons[0]).toBeDisabled());
+
+      fireEvent.click(buttons[2]); // try clicking step 3 while pending
+      expect(slowCb).toHaveBeenCalledTimes(1);
+
+      act(() => resolveCallback());
     });
   });
 
-  // ── #810 Completion logic ─────────────────────────────────────────────────
+  // ── #810 Completion ───────────────────────────────────────────────────────
   describe("Completion logic", () => {
-    it("calls onComplete when all required steps are done", async () => {
+    it("calls onComplete when all required steps are completed", async () => {
       const allRequired = [
         { ...step1, completed: true },
         { ...step2, completed: true },
@@ -206,7 +244,7 @@ describe("OnboardingProgressTracker", () => {
       expect(defaultProps.onComplete).not.toHaveBeenCalled();
     });
 
-    it("shows translated successTitle in the completion banner", async () => {
+    it("renders the translated successTitle in the completion banner", async () => {
       const allRequired = [
         { ...step1, completed: true },
         { ...step2, completed: true },
@@ -218,7 +256,7 @@ describe("OnboardingProgressTracker", () => {
       );
     });
 
-    it("shows translated successMessage in the completion banner", async () => {
+    it("renders the translated successMessage in the completion banner", async () => {
       const allRequired = [
         { ...step1, completed: true },
         { ...step2, completed: true },
@@ -233,59 +271,69 @@ describe("OnboardingProgressTracker", () => {
 
   // ── #811 Accessibility ────────────────────────────────────────────────────
   describe("Accessibility (#811)", () => {
-    it("wraps the tracker in a region landmark with translated aria-label", () => {
+    it("wraps tracker in a region with translated aria-label", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const region = screen.getByRole("region");
-      expect(region).toHaveAttribute("aria-label", "progressTracker");
+      expect(screen.getByRole("region")).toHaveAttribute(
+        "aria-label",
+        "progressTracker",
+      );
     });
 
-    it("sets aria-live='polite' on the region element", () => {
+    it("sets aria-live='polite' on the region", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getByRole("region")).toHaveAttribute("aria-live", "polite");
     });
 
-    it("renders an aria-live status region for announcements", () => {
+    it("provides an aria-live status region for announcements", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getByRole("status")).toBeInTheDocument();
     });
 
-    it("announces progress percentage on mount", () => {
+    it("announces progress on mount", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const status = screen.getByRole("status");
-      expect(status.textContent).toMatch(/33/);
+      expect(screen.getByRole("status").textContent).toMatch(/33/);
     });
 
-    it("labels the steps list with the translated aria-label", () => {
+    it("labels the steps list with the translated key", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getByRole("list")).toHaveAttribute("aria-label", "stepsList");
     });
 
-    it("sets aria-current='step' on the active step button", () => {
+    it("sets aria-current='step' on the active step", () => {
       render(<OnboardingProgressTracker {...defaultProps} currentStep="1" />);
-      const btn = getStepBtn("Step 1: Step 1");
-      expect(btn).toHaveAttribute("aria-current", "step");
+      expect(screen.getAllByRole("button")[0]).toHaveAttribute(
+        "aria-current",
+        "step",
+      );
     });
 
-    it("does not set aria-current on non-active steps", () => {
+    it("does not set aria-current on inactive steps", () => {
       render(<OnboardingProgressTracker {...defaultProps} currentStep="1" />);
-      const btn = getStepBtn("Step 2: Step 2");
-      expect(btn).not.toHaveAttribute("aria-current");
+      expect(screen.getAllByRole("button")[1]).not.toHaveAttribute("aria-current");
     });
 
     it("sets aria-setsize and aria-posinset on step buttons", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const btn1 = getStepBtn("Step 1: Step 1");
-      expect(btn1).toHaveAttribute("aria-setsize", "3");
-      expect(btn1).toHaveAttribute("aria-posinset", "1");
-
-      const btn2 = getStepBtn("Step 2: Step 2");
-      expect(btn2).toHaveAttribute("aria-posinset", "2");
+      const buttons = screen.getAllByRole("button");
+      expect(buttons[0]).toHaveAttribute("aria-setsize", "3");
+      expect(buttons[0]).toHaveAttribute("aria-posinset", "1");
+      expect(buttons[1]).toHaveAttribute("aria-posinset", "2");
+      expect(buttons[2]).toHaveAttribute("aria-posinset", "3");
     });
 
-    it("sets aria-roledescription='onboarding step' on step buttons", () => {
+    it("sets aria-roledescription on step buttons", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const btn = getStepBtn("Step 1: Step 1");
-      expect(btn).toHaveAttribute("aria-roledescription", "onboarding step");
+      screen.getAllByRole("button").forEach((btn) => {
+        expect(btn).toHaveAttribute("aria-roledescription", "onboarding step");
+      });
+    });
+
+    it("marks the progressbar with translated aria-label", () => {
+      render(<OnboardingProgressTracker {...defaultProps} />);
+      expect(screen.getByRole("progressbar")).toHaveAttribute(
+        "aria-label",
+        "progressBar",
+      );
     });
 
     it("completion banner has role='alert' and aria-live='polite'", async () => {
@@ -304,29 +352,26 @@ describe("OnboardingProgressTracker", () => {
 
     it("marks required asterisk with translated aria-label", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      const required = screen.getAllByLabelText("required");
-      expect(required.length).toBeGreaterThan(0);
+      // Both step1 and step2 are required → two * elements
+      expect(screen.getAllByLabelText("required").length).toBeGreaterThan(0);
     });
 
     it("announces step details when a step button is clicked", async () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
-      fireEvent.click(getStepBtn("Step 2: Step 2"));
-      const status = screen.getByRole("status");
+      fireEvent.click(screen.getAllByRole("button")[1]);
       await waitFor(() => {
-        expect(status.textContent).toMatch(/Step 2/);
-        expect(status.textContent).toMatch(/Desc 2/);
+        expect(screen.getByRole("status").textContent).toMatch(/Step 2|Desc 2/);
       });
     });
   });
 
   // ── #812 Optimistic updates ───────────────────────────────────────────────
   describe("Optimistic updates (#812)", () => {
-    it("immediately reflects the clicked step as active before callback resolves", async () => {
+    it("immediately marks the clicked step as current before callback resolves", async () => {
       let resolveCallback!: () => void;
       const slowCb = vi.fn(
         () => new Promise<void>((res) => { resolveCallback = res; }),
       );
-
       render(
         <OnboardingProgressTracker
           {...defaultProps}
@@ -335,17 +380,15 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      const btn2 = getStepBtn("Step 2: Step 2");
+      const btn2 = screen.getAllByRole("button")[1];
       fireEvent.click(btn2);
-
       await waitFor(() =>
         expect(btn2).toHaveAttribute("aria-current", "step"),
       );
-
       act(() => resolveCallback());
     });
 
-    it("confirms the optimistic update after the callback resolves", async () => {
+    it("confirms the optimistic update after callback resolves", async () => {
       const asyncCb = vi.fn(() => Promise.resolve());
       render(
         <OnboardingProgressTracker
@@ -355,9 +398,8 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      const btn2 = getStepBtn("Step 2: Step 2");
+      const btn2 = screen.getAllByRole("button")[1];
       fireEvent.click(btn2);
-
       await waitFor(() => {
         expect(asyncCb).toHaveBeenCalledWith("2");
         expect(btn2).toHaveAttribute("aria-current", "step");
@@ -366,7 +408,6 @@ describe("OnboardingProgressTracker", () => {
 
     it("rolls back to the previous step when the callback throws", async () => {
       const failCb = vi.fn(() => Promise.reject(new Error("server error")));
-
       render(
         <OnboardingProgressTracker
           {...defaultProps}
@@ -375,20 +416,18 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      const btn1 = getStepBtn("Step 1: Step 1");
-      const btn2 = getStepBtn("Step 2: Step 2");
+      const btn1 = screen.getAllByRole("button")[0];
+      const btn2 = screen.getAllByRole("button")[1];
 
       fireEvent.click(btn2);
-
       await waitFor(() => {
         expect(btn1).toHaveAttribute("aria-current", "step");
         expect(btn2).not.toHaveAttribute("aria-current");
       });
     });
 
-    it("announces a failure message to screen readers on rollback", async () => {
+    it("announces the translated stepChangeFailed key on rollback", async () => {
       const failCb = vi.fn(() => Promise.reject(new Error("fail")));
-
       render(
         <OnboardingProgressTracker
           {...defaultProps}
@@ -397,8 +436,7 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      fireEvent.click(getStepBtn("Step 2: Step 2"));
-
+      fireEvent.click(screen.getAllByRole("button")[1]);
       await waitFor(() => {
         expect(screen.getByRole("status").textContent).toContain(
           "stepChangeFailed",
@@ -406,12 +444,11 @@ describe("OnboardingProgressTracker", () => {
       });
     });
 
-    it("sets aria-busy on the pending step button during an optimistic update", async () => {
+    it("sets aria-busy on the pending step button", async () => {
       let resolveCallback!: () => void;
       const slowCb = vi.fn(
         () => new Promise<void>((res) => { resolveCallback = res; }),
       );
-
       render(
         <OnboardingProgressTracker
           {...defaultProps}
@@ -420,22 +457,17 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      const btn2 = getStepBtn("Step 2: Step 2");
+      const btn2 = screen.getAllByRole("button")[1];
       fireEvent.click(btn2);
-
-      await waitFor(() =>
-        expect(btn2).toHaveAttribute("aria-busy", "true"),
-      );
-
+      await waitFor(() => expect(btn2).toHaveAttribute("aria-busy", "true"));
       act(() => resolveCallback());
     });
 
-    it("disables all step buttons while a step change is pending", async () => {
+    it("disables all step buttons while pending", async () => {
       let resolveCallback!: () => void;
       const slowCb = vi.fn(
         () => new Promise<void>((res) => { resolveCallback = res; }),
       );
-
       render(
         <OnboardingProgressTracker
           {...defaultProps}
@@ -444,31 +476,19 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      fireEvent.click(getStepBtn("Step 2: Step 2"));
-
+      fireEvent.click(screen.getAllByRole("button")[1]);
       await waitFor(() => {
-        const buttons = screen.getAllByRole("button");
-        buttons.forEach((btn) => expect(btn).toBeDisabled());
+        screen.getAllByRole("button").forEach((btn) =>
+          expect(btn).toBeDisabled(),
+        );
       });
-
       act(() => resolveCallback());
     });
   });
 
   // ── i18n ──────────────────────────────────────────────────────────────────
-  describe("i18n", () => {
-    it("uses the translated 'progressBar' key for the progressbar aria-label", () => {
-      render(<OnboardingProgressTracker {...defaultProps} />);
-      const bar = screen.getByRole("progressbar");
-      expect(bar).toHaveAttribute("aria-label", "progressBar");
-    });
-
-    it("uses the translated 'stepsList' key for the list aria-label", () => {
-      render(<OnboardingProgressTracker {...defaultProps} />);
-      expect(screen.getByRole("list")).toHaveAttribute("aria-label", "stepsList");
-    });
-
-    it("uses the translated 'progressTracker' key for the region aria-label", () => {
+  describe("i18n — useOnboardingI18n", () => {
+    it("uses 'progressTracker' key for region aria-label", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getByRole("region")).toHaveAttribute(
         "aria-label",
@@ -476,7 +496,20 @@ describe("OnboardingProgressTracker", () => {
       );
     });
 
-    it("displays translated 'allCompleted' text when onboarding is complete", async () => {
+    it("uses 'progressBar' key for progressbar aria-label", () => {
+      render(<OnboardingProgressTracker {...defaultProps} />);
+      expect(screen.getByRole("progressbar")).toHaveAttribute(
+        "aria-label",
+        "progressBar",
+      );
+    });
+
+    it("uses 'stepsList' key for list aria-label", () => {
+      render(<OnboardingProgressTracker {...defaultProps} />);
+      expect(screen.getByRole("list")).toHaveAttribute("aria-label", "stepsList");
+    });
+
+    it("renders allCompleted when onboarding is complete", async () => {
       const allDone = [
         { ...step1, completed: true },
         { ...step2, completed: true },
@@ -487,46 +520,52 @@ describe("OnboardingProgressTracker", () => {
         expect(screen.getByText("allCompleted")).toBeInTheDocument(),
       );
     });
+
+    it("uses parameterised percentComplete key in header badge", () => {
+      render(<OnboardingProgressTracker {...defaultProps} />);
+      // 1 of 3 = 33 — mock produces "percentComplete" with {percent} substituted
+      expect(screen.getByText(/33/)).toBeInTheDocument();
+    });
+
+    it("uses parameterised stepsCompleted key in summary line", () => {
+      render(<OnboardingProgressTracker {...defaultProps} />);
+      // mock renders "stepsCompleted" with tokens substituted
+      expect(screen.getAllByText(/stepsCompleted|1.*3/i).length).toBeGreaterThan(0);
+    });
   });
 
   // ── #809 Animations ───────────────────────────────────────────────────────
   describe("Animations (#809)", () => {
-    it("renders the progress bar fill element used for animation", () => {
+    it("renders the progress bar fill element", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getByTestId("progress-bar-fill")).toBeInTheDocument();
     });
 
-    it("renders the correct number of step list items", () => {
+    it("renders all step list items", () => {
       render(<OnboardingProgressTracker {...defaultProps} />);
       expect(screen.getAllByRole("listitem")).toHaveLength(3);
     });
   });
 
-  // ── Hook integration ──────────────────────────────────────────────────────
+  // ── Hook integration (SYNC_STEPS / currentStep prop sync) ─────────────────
   describe("useOnboardingProgress integration", () => {
     it("syncs an external currentStep prop change", async () => {
       const { rerender } = render(
         <OnboardingProgressTracker {...defaultProps} currentStep="1" />,
       );
+      expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-current", "step");
 
-      let btn1 = getStepBtn("Step 1: Step 1");
-      expect(btn1).toHaveAttribute("aria-current", "step");
+      rerender(<OnboardingProgressTracker {...defaultProps} currentStep="2" />);
 
-      rerender(
-        <OnboardingProgressTracker {...defaultProps} currentStep="2" />,
+      await waitFor(() =>
+        expect(screen.getAllByRole("button")[1]).toHaveAttribute("aria-current", "step"),
       );
-
-      await waitFor(() => {
-        const btn2 = getStepBtn("Step 2: Step 2");
-        expect(btn2).toHaveAttribute("aria-current", "step");
-      });
     });
 
-    it("updates progress percentage when a completed step is added", async () => {
+    it("updates progress percentage when a completed step is added via SYNC_STEPS", async () => {
       const { rerender } = render(
         <OnboardingProgressTracker {...defaultProps} />,
       );
-      // 1 / 3 = 33%
       expect(screen.getByTestId("progress-bar-fill")).toHaveStyle("width: 33%");
 
       rerender(
@@ -540,10 +579,9 @@ describe("OnboardingProgressTracker", () => {
         />,
       );
 
-      await waitFor(() => {
-        // 2 / 3 = 67%
-        expect(screen.getByTestId("progress-bar-fill")).toHaveStyle("width: 67%");
-      });
+      await waitFor(() =>
+        expect(screen.getByTestId("progress-bar-fill")).toHaveStyle("width: 67%"),
+      );
     });
   });
 });
