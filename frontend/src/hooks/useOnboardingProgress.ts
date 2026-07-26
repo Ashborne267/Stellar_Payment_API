@@ -1,16 +1,12 @@
 /**
  * useOnboardingProgress
  *
- * Encapsulates all stateful logic for the Onboarding Progress Tracker so the
- * component stays a pure presentation layer.
+ * Encapsulates all stateful logic for the Onboarding Progress Tracker.
  *
- * Responsibilities:
- * - Owns the useReducer instance and exposes read-only derived values.
- * - Syncs external prop changes (steps array) into the reducer via SYNC_STEPS.
- * - Syncs external currentStep prop changes via SET_CURRENT_STEP.
- * - Handles optimistic step navigation with async callback + rollback.
- * - Produces translated screen-reader announcement strings via useOnboardingI18n.
- * - Fires onComplete when all required steps are done.
+ * Bundle-optimisation notes:
+ * - No direct framer-motion import — pure React hooks only.
+ * - selectProgressPercent now reads from state directly (no extra args).
+ * - SYNC_STEPS wired correctly with the updated action union.
  */
 
 "use client";
@@ -32,7 +28,7 @@ import {
 } from "@/components/onboarding-reducer";
 import { useOnboardingI18n } from "@/hooks/useOnboardingI18n";
 
-// ── Shared step type (re-exported for consumers) ──────────────────────────────
+// ── Shared step type ──────────────────────────────────────────────────────────
 
 export interface OnboardingStep {
   id: string;
@@ -95,6 +91,7 @@ export function useOnboardingProgress({
 
   const [state, dispatch] = useReducer(
     onboardingReducer,
+    // Factory now takes (currentStep, totalSteps, completedSteps)
     createInitialOnboardingState(
       currentStepProp ?? sortedSteps[0]?.id,
       sortedSteps.length,
@@ -125,6 +122,7 @@ export function useOnboardingProgress({
   // ── Derived values ────────────────────────────────────────────────────────
 
   const effectiveCurrentStep = selectEffectiveStep(state);
+  // selectProgressPercent now reads totalSteps/completedSteps from state
   const progressPercent = selectProgressPercent(state);
 
   // ── Completion side-effect ────────────────────────────────────────────────
@@ -173,10 +171,7 @@ export function useOnboardingProgress({
         dispatch({ type: "CONFIRM_STEP", payload: stepId });
       } catch {
         dispatch({ type: "ROLLBACK_STEP" });
-        dispatch({
-          type: "SET_ANNOUNCEMENT",
-          payload: i18n.stepChangeFailed,
-        });
+        dispatch({ type: "SET_ANNOUNCEMENT", payload: i18n.stepChangeFailed });
       }
     },
     [sortedSteps, effectiveCurrentStep, onStepChange, state.isPending, i18n],

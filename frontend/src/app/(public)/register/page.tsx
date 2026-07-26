@@ -1,7 +1,26 @@
 import RegistrationForm from "@/components/RegistrationForm";
 import Link from "next/link";
 import GuestGuard from "@/components/GuestGuard";
-import { OnboardingProgressTracker, type OnboardingStep } from "@/components/OnboardingProgressTracker";
+import dynamic from "next/dynamic";
+import OnboardingTrackerSkeleton from "@/components/OnboardingTrackerSkeleton";
+import type { OnboardingStep } from "@/components/OnboardingProgressTracker";
+
+/**
+ * Lazy-load the tracker so its JS bundle (including framer-motion) is only
+ * fetched after the page paints — the skeleton renders instantly in its place.
+ */
+const OnboardingProgressTracker = dynamic(
+  () => import("@/components/OnboardingProgressTracker").then((m) => m.OnboardingProgressTracker),
+  {
+    ssr: false,
+    loading: () => (
+      <OnboardingTrackerSkeleton
+        stepCount={5}
+        loadingLabel="Loading onboarding steps…"
+      />
+    ),
+  },
+);
 
 /**
  * Demo steps shown on the registration page so users understand the full
