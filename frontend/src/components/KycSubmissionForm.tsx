@@ -1,5 +1,18 @@
 "use client";
 
+/**
+ * KycSubmissionForm — Client Component (minimum client boundary)
+ *
+ * RSC migration notes:
+ * - This is the ONLY "use client" file in the KYC feature tree.
+ * - All static chrome (page heading, why-KYC aside) was moved to the RSC
+ *   layer (KycPageContent / KycFormShell) and never ships as client JS.
+ * - Accepts `initialValues` prop so the server can pre-populate fields from
+ *   a session or a previous incomplete submission without a client round-trip.
+ * - The component is lazy-loaded via dynamic() in KycFormShell and wrapped
+ *   in <Suspense> so the static shell streams before this bundle is sent.
+ */
+
 import React, { useReducer, useCallback, useState, useId } from "react";
 import { motion, AnimatePresence, type Variants } from "framer-motion";
 import { useTranslations } from "next-intl";
@@ -8,7 +21,20 @@ import {
   kycFlowReducer,
   initialKycFlowState,
   type KycStep,
+  type KycFlowState,
 } from "@/lib/kyc-flow";
+
+// ── Serialisable initial-values type (no File objects — safe to pass from RSC) ─
+
+export interface KycInitialValues {
+  personal?: Partial<KycFlowState["personal"]>;
+  address?: Partial<KycFlowState["address"]>;
+  documents?: {
+    idType?: KycFlowState["documents"]["idType"];
+    idNumber?: string;
+  };
+  currentStep?: KycStep;
+}
 
 const STEPS: KycStep[] = ["personal", "address", "documents", "review"];
 const TOTAL_STEPS = STEPS.length;
@@ -83,10 +109,32 @@ function Field({
   );
 }
 
-function KycSubmissionForm() {
+function KycSubmissionForm({ initialValues }: { initialValues?: KycInitialValues }) {
   const t = useTranslations("kycForm");
   const uid = useId();
-  const [state, dispatch] = useReducer(kycFlowReducer, initialKycFlowState);
+
+  // Merge server-supplied initial values into the default state so the form
+  // is pre-populated when the server passes session data.
+  const mergedInitialState: typeof initialKycFlowState = {
+    ...initialKycFlowState,
+    ...(initialValues?.currentStep
+      ? { currentStep: initialValues.currentStep }
+      : {}),
+    personal: {
+      ...initialKycFlowState.personal,
+      ...initialValues?.personal,
+    },
+    address: {
+      ...initialKycFlowState.address,
+      ...initialValues?.address,
+    },
+    documents: {
+      ...initialKycFlowState.documents,
+      ...initialValues?.documents,
+    },
+  };
+
+  const [state, dispatch] = useReducer(kycFlowReducer, mergedInitialState);
   const [direction, setDirection] = useState(1);
   const [announcement, setAnnouncement] = useState("");
   const [stepErrors, setStepErrors] = useState<Record<string, string>>({});

@@ -71,6 +71,122 @@ html {
   scroll-behavior: smooth;
 }
 
+/* ── Dark mode CSS custom property overrides ───────────────────────────────
+   When the theme engine adds the "dark" class to <html>, every CSS variable
+   defined here takes precedence over the :root light-mode defaults below.
+   Components that use var(--bg), var(--text-primary), etc. automatically
+   adapt without any Tailwind class changes.
+   ──────────────────────────────────────────────────────────────────────── */
+.dark {
+  color-scheme: dark;
+
+  --bg: #0a0a0a;
+  --text-primary: #f5f5f5;
+  --text-secondary: #a0a0a0;
+  --border-subtle: #1f1f1f;
+  --surface-subtle: #111111;
+  --accent: #ffffff;
+
+  /* Pluto palette — dark-mode shift (cooler, deeper) */
+  --pluto-900: #e8f2fb;
+  --pluto-800: #c4ddf4;
+  --pluto-700: #9ec4ea;
+  --pluto-600: #78aade;
+  --pluto-500: #5a91d0;
+  --pluto-400: #3d74b8;
+  --pluto-300: #2a5a9a;
+  --pluto-200: #1a3f70;
+  --pluto-100: #0e2547;
+  --pluto-50:  #060f1e;
+}
+
+/* Dark mode scrollbar */
+.dark .overflow-x-auto {
+  scrollbar-color: #2a2a2a transparent;
+}
+
+.dark .overflow-x-auto::-webkit-scrollbar-thumb {
+  background-color: #2a2a2a;
+}
+
+.dark .overflow-x-auto::-webkit-scrollbar-thumb:hover {
+  background-color: #3a3a3a;
+}
+
+/* Dark mode docs-prose overrides */
+.dark .docs-prose {
+  color: #c8c8c8;
+}
+
+.dark .docs-prose h1,
+.dark .docs-prose h2,
+.dark .docs-prose h3,
+.dark .docs-prose h4 {
+  color: #f0f0f0;
+}
+
+.dark .docs-prose h2 {
+  border-bottom-color: #1f1f1f;
+}
+
+.dark .docs-prose p,
+.dark .docs-prose ul,
+.dark .docs-prose ol,
+.dark .docs-prose li {
+  color: #b0b0b0;
+}
+
+.dark .docs-prose strong {
+  color: #f0f0f0;
+}
+
+.dark .docs-prose a {
+  color: var(--pluto-600);
+}
+
+.dark .docs-prose a:hover {
+  color: var(--pluto-500);
+}
+
+.dark .docs-prose code {
+  background: #1a1a1a;
+  border-color: #2a2a2a;
+  color: #e0e0e0;
+}
+
+.dark .docs-prose thead tr {
+  background: #111111;
+  border-bottom-color: #1f1f1f;
+}
+
+.dark .docs-prose th {
+  color: #808080;
+}
+
+.dark .docs-prose td {
+  border-bottom-color: #1a1a1a;
+  color: #b0b0b0;
+}
+
+.dark .docs-prose tbody tr:hover {
+  background: #111111;
+}
+
+.dark .docs-prose hr {
+  border-top-color: #1f1f1f;
+}
+
+.dark .docs-prose blockquote {
+  background: var(--pluto-50);
+  color: var(--pluto-800);
+  border-left-color: var(--pluto-400);
+}
+
+/* Dark mode focus ring */
+.dark *:focus-visible {
+  @apply ring-offset-black;
+}
+
 :root {
   color-scheme: light;
   --bg: #ffffff;
