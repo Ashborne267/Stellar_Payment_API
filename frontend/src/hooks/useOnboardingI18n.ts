@@ -1,18 +1,22 @@
 /**
  * useOnboardingI18n
  *
- * Centralises every translated string used by the Onboarding Progress Tracker.
- * Consuming components call this hook once and receive a stable object of
- * typed helpers — no duplicated useTranslations("onboarding") calls scattered
- * across files.
+ * Centralises every translated string for the Onboarding Progress Tracker.
+ *
+ * Bundle-optimisation notes:
+ * - The returned object is memoised with useMemo keyed on `t` (which only
+ *   changes on locale switch) so the hook never causes downstream re-renders
+ *   from reference inequality.
+ * - Helper functions are stable useCallback references, not plain arrow
+ *   functions, so memo'd children won't re-render on each parent cycle.
  */
 
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useTranslations } from "next-intl";
 
-// ── Step data shape (minimal — component owns the full type) ──────────────────
+// ── Step data shape ───────────────────────────────────────────────────────────
 
 interface StepMeta {
   order: number;
@@ -25,7 +29,6 @@ interface StepMeta {
 // ── Return type ───────────────────────────────────────────────────────────────
 
 export interface OnboardingI18n {
-  // Static strings
   title: string;
   subtitle: string;
   progressBar: string;
@@ -41,27 +44,11 @@ export interface OnboardingI18n {
   optional: string;
   updating: string;
   stepChangeFailed: string;
-
-  // Parameterised helpers
-  /** "X of Y steps completed" */
   stepsCompletedLabel: (completed: number, total: number) => string;
-  /** "N% complete" */
   percentCompleteLabel: (percent: number) => string;
-  /** Progress announcement for aria-live: "Progress: N% complete" */
   progressAnnouncement: (percent: number) => string;
-  /**
-   * Full step button aria-label.
-   * Appends ". Completed" and/or ". Required" as appropriate.
-   */
-  stepAriaLabel: (
-    number: number,
-    title: string,
-    completed: boolean,
-    required: boolean,
-  ) => string;
-  /** Step click announcement for the aria-live region. */
+  stepAriaLabel: (number: number, title: string, completed: boolean, required: boolean) => string;
   stepAnnouncement: (step: StepMeta, total: number, statusLabel: string) => string;
-  /** Status label for a given step state. */
   statusLabel: (completed: boolean, isCurrent: boolean) => string;
 }
 
@@ -70,9 +57,10 @@ export interface OnboardingI18n {
 export function useOnboardingI18n(): OnboardingI18n {
   const t = useTranslations("onboarding");
 
+  // ── Stable helper callbacks ───────────────────────────────────────────────
+
   const stepsCompletedLabel = useCallback(
-    (completed: number, total: number) =>
-      t("stepsCompleted", { completed, total }),
+    (completed: number, total: number) => t("stepsCompleted", { completed, total }),
     [t],
   );
 
@@ -87,14 +75,8 @@ export function useOnboardingI18n(): OnboardingI18n {
   );
 
   const stepAriaLabel = useCallback(
-    (
-      number: number,
-      title: string,
-      completed: boolean,
-      required: boolean,
-    ): string => {
-      if (completed && required)
-        return t("stepLabelCompletedRequired", { number, title });
+    (number: number, title: string, completed: boolean, required: boolean): string => {
+      if (completed && required) return t("stepLabelCompletedRequired", { number, title });
       if (completed) return t("stepLabelCompleted", { number, title });
       if (required) return t("stepLabelRequired", { number, title });
       return t("stepLabel", { number, title });
@@ -123,27 +105,36 @@ export function useOnboardingI18n(): OnboardingI18n {
     [t],
   );
 
-  return {
-    title: t("title"),
-    subtitle: t("subtitle"),
-    progressBar: t("progressBar"),
-    stepsList: t("stepsList"),
-    progressTracker: t("progressTracker"),
-    allCompleted: t("allCompleted"),
-    successTitle: t("successTitle"),
-    successMessage: t("successMessage"),
-    completed: t("completed"),
-    inProgress: t("inProgress"),
-    pending: t("pending"),
-    required: t("required"),
-    optional: t("optional"),
-    updating: t("updating"),
-    stepChangeFailed: t("stepChangeFailed"),
-    stepsCompletedLabel,
-    percentCompleteLabel,
-    progressAnnouncement,
-    stepAriaLabel,
-    stepAnnouncement,
-    statusLabel,
-  };
+  // ── Memoised return object ────────────────────────────────────────────────
+  // Re-computes only when `t` changes (i.e. on locale switch).
+
+  return useMemo<OnboardingI18n>(
+    () => ({
+      title: t("title"),
+      subtitle: t("subtitle"),
+      progressBar: t("progressBar"),
+      stepsList: t("stepsList"),
+      progressTracker: t("progressTracker"),
+      allCompleted: t("allCompleted"),
+      successTitle: t("successTitle"),
+      successMessage: t("successMessage"),
+      completed: t("completed"),
+      inProgress: t("inProgress"),
+      pending: t("pending"),
+      required: t("required"),
+      optional: t("optional"),
+      updating: t("updating"),
+      stepChangeFailed: t("stepChangeFailed"),
+      stepsCompletedLabel,
+      percentCompleteLabel,
+      progressAnnouncement,
+      stepAriaLabel,
+      stepAnnouncement,
+      statusLabel,
+    }),
+    // t is stable between renders unless the locale changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t, stepsCompletedLabel, percentCompleteLabel, progressAnnouncement,
+     stepAriaLabel, stepAnnouncement, statusLabel],
+  );
 }
