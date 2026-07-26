@@ -32,6 +32,9 @@ import {
 import { getPayloadForVersion } from "../webhooks/resolver.js";
 import { streamManager } from "../lib/stream-manager.js";
 import {
+  exchangeRateQuoteRequests,
+  exchangeRateQuoteDuration,
+  exchangeRateSlippageApplied,
   paymentCreatedCounter,
   paymentConfirmedCounter,
   paymentConfirmationLatency,
@@ -1142,10 +1145,13 @@ function createPaymentsRouter({
     validateUuidParam(),
     validateRequest({ query: pathPaymentQuoteQuerySchema }),
     async (req, res, next) => {
+      const startTime = Date.now();
+      const sourceAsset = req.query.source_asset;
+      const sourceAssetIssuer = req.query.source_asset_issuer || null;
+      const assetLabels = { source_asset: sourceAsset, dest_asset: "pending" };
+
       try {
         const supabase = await getSupabaseClient();
-        const sourceAsset = req.query.source_asset;
-        const sourceAssetIssuer = req.query.source_asset_issuer || null;
         const sourceAccount = req.query.source_account;
 
         let query = supabase
@@ -1167,10 +1173,18 @@ function createPaymentsRouter({
         }
 
         if (!data) {
+          exchangeRateQuoteRequests.inc({ ...assetLabels, result: "error" });
           return res.status(404).json({ error: "Payment not found" });
         }
 
+        assetLabels.dest_asset = data.asset;
+
         if (data.status !== "pending") {
+          exchangeRateQuoteRequests.inc({ ...assetLabels, result: "not_pending" });
+          exchangeRateQuoteDuration.observe(
+            { ...assetLabels, result: "not_pending" },
+            (Date.now() - startTime) / 1000,
+          );
           return res.status(409).json({
             error: "Path payment quote is only available for pending payments",
             status: data.status,
@@ -1182,6 +1196,11 @@ function createPaymentsRouter({
           sourceAssetIssuer === (data.asset_issuer || null);
 
         if (sameAsset) {
+          exchangeRateQuoteRequests.inc({ ...assetLabels, result: "same_asset" });
+          exchangeRateQuoteDuration.observe(
+            { ...assetLabels, result: "same_asset" },
+            (Date.now() - startTime) / 1000,
+          );
           return res.status(400).json({
             error:
               "Source asset is the same as destination asset. Use a direct payment.",
@@ -1209,6 +1228,13 @@ function createPaymentsRouter({
           (1 + SLIPPAGE)
         ).toFixed(7);
 
+        exchangeRateSlippageApplied.inc({ slippage_pct: String(SLIPPAGE) });
+        exchangeRateQuoteRequests.inc({ ...assetLabels, result: "success" });
+        exchangeRateQuoteDuration.observe(
+          { ...assetLabels, result: "success" },
+          (Date.now() - startTime) / 1000,
+        );
+
         res.json({
           source_asset: quote.source_asset_code,
           source_asset_issuer: quote.source_asset_issuer,
@@ -1221,6 +1247,11 @@ function createPaymentsRouter({
           slippage: SLIPPAGE,
         });
       } catch (err) {
+        exchangeRateQuoteRequests.inc({ ...assetLabels, result: "error" });
+        exchangeRateQuoteDuration.observe(
+          { ...assetLabels, result: "error" },
+          (Date.now() - startTime) / 1000,
+        );
         next(err);
       }
     }
