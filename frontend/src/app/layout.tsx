@@ -2,6 +2,7 @@ import "./globals.css";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import ThemeProvider from "@/components/ThemeProvider";
+import ThemeLanguageSync from "@/components/ThemeLanguageSync";
 import ErrorBoundary from "@/components/ErrorBoundary";
 import ToastProvider from "@/components/ToastProvider";
 import CommandPalette from "@/components/CommandPalette";
@@ -40,6 +41,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="min-h-screen font-sans bg-white text-[#0A0A0A]">
         <NextIntlClientProvider locale={locale} messages={messages}>
           <ThemeProvider>
+            <ThemeLanguageSync />
             <DisplayPreferencesProvider>
               <WalletContextProvider>
                 <ToastProvider />

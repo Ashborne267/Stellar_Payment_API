@@ -574,6 +574,42 @@
     "successDescription": "Your KYC verification has been submitted and is under review.",
     "dash": "—"
   },
+  "darkModeTheme": {
+    "loading": "Loading theme settings",
+    "errorCleared": "Error cleared. Attempting to toggle theme.",
+    "switchingTo": "Switching to {theme} theme.",
+    "themeChanged": "Theme changed to {theme}.",
+    "themeError": "Failed to toggle theme. Please try again.",
+    "currentTheme": "Current theme: {theme}",
+    "systemTheme": "System ({theme})",
+    "ariaError": "Theme toggle with error — press to retry",
+    "ariaLabel": "Theme toggle, current theme: {theme}. Press to switch to next theme.",
+    "ariaLoading": "Theme is loading",
+    "errorTitle": "Theme error: {error}. Press to retry.",
+    "titleSystem": "Theme: System ({theme})",
+    "titleLight": "Theme: Light",
+    "titleDark": "Theme: Dark",
+    "description": "Cycle through light, dark, and system themes. System follows your device preference. Press Space or Enter to activate.",
+    "preferenceLabel": "Theme preference",
+    "preferenceSaved": "Theme preference saved",
+    "preferenceRestored": "Theme preference restored",
+    "themes": {
+      "light": "light",
+      "dark": "dark",
+      "system": "system"
+    },
+    "themeNames": {
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
+    "sr": {
+      "sunIcon": "Sun icon — light mode active",
+      "moonIcon": "Moon icon — dark mode active",
+      "systemIcon": "Monitor icon — system theme active",
+      "errorIcon": "Error icon — theme failed to apply"
+    }
+  },
   "portfolioChartWidget": {
     "title": "Portfolio Value",
     "allocation": "Allocation",

@@ -1,38 +1,35 @@
 import { useCallback, useEffect, useState } from "react";
 import { useThemeState, useThemeActions } from "@/lib/theme-context";
-import { useTranslations } from "next-intl";
+import { useThemeI18n } from "@/hooks/useThemeI18n";
 
 export type LoadingState = "idle" | "loading" | "success" | "error";
 
 export function useAccessibilityContrast() {
   const { theme, resolvedTheme, isMounted, isLoading, error } = useThemeState();
   const { toggleTheme, clearError } = useThemeActions();
-  const t = useTranslations("accessibility");
+  const i18n = useThemeI18n();
 
   const [announcement, setAnnouncement] = useState<string>("");
   const [loadingState, setLoadingState] = useState<LoadingState>("idle");
 
   const getNextTheme = useCallback((): string => {
-    const themes = ["light", "dark", "system"];
-    const currentIndex = theme ? themes.indexOf(theme) : 0;
-    const nextIndex = (currentIndex + 1) % themes.length;
-    const nextTheme = themes[nextIndex];
-    return nextTheme === "system"
-      ? t("systemTheme", { theme: resolvedTheme })
-      : t(`theme.${nextTheme}`);
-  }, [theme, resolvedTheme, t]);
+    const themes = ["light", "dark", "system"] as const;
+    const currentIndex = theme ? themes.indexOf(theme as (typeof themes)[number]) : 0;
+    const next = themes[(currentIndex + 1) % themes.length];
+    return i18n.currentThemeLabel(next, resolvedTheme);
+  }, [theme, resolvedTheme, i18n]);
 
   const handleContrastToggle = useCallback(async () => {
     if (error) {
       clearError();
       setLoadingState("idle");
-      setAnnouncement(t("errorCleared"));
+      setAnnouncement(i18n.errorCleared);
       return;
     }
 
     setLoadingState("loading");
     const nextTheme = getNextTheme();
-    setAnnouncement(t("switchingTo", { theme: nextTheme }));
+    setAnnouncement(i18n.switchingToLabel(nextTheme));
 
     try {
       await toggleTheme();
@@ -40,37 +37,29 @@ export function useAccessibilityContrast() {
 
       setTimeout(() => {
         setLoadingState("idle");
-        setAnnouncement(t("themeChanged", { theme: nextTheme }));
+        setAnnouncement(i18n.themeChangedLabel(nextTheme));
       }, 500);
     } catch {
       setLoadingState("error");
-      setAnnouncement(t("themeError"));
+      setAnnouncement(i18n.themeError);
       setTimeout(() => setLoadingState("idle"), 2000);
     }
-  }, [toggleTheme, error, clearError, t, getNextTheme]);
+  }, [toggleTheme, error, clearError, i18n, getNextTheme]);
 
   useEffect(() => {
     if (isMounted && !isLoading && !error) {
-      const currentThemeDesc = theme === "system"
-        ? t("systemTheme", { theme: resolvedTheme })
-        : t(`theme.${theme}`);
-      setAnnouncement(t("currentTheme", { theme: currentThemeDesc }));
+      const desc = i18n.currentThemeLabel(theme, resolvedTheme);
+      setAnnouncement(desc);
     }
-  }, [theme, resolvedTheme, isMounted, isLoading, error, t]);
+  }, [theme, resolvedTheme, isMounted, isLoading, error, i18n]);
 
   const getAriaLabel = useCallback(() => {
-    if (error) return t("ariaError");
-    const currentThemeDesc = theme === "system"
-      ? t("systemTheme", { theme: resolvedTheme })
-      : t(`theme.${theme}`);
-    return t("ariaLabel", { theme: currentThemeDesc });
-  }, [error, theme, resolvedTheme, t]);
+    return i18n.getAriaLabel(theme, resolvedTheme, !!error);
+  }, [error, theme, resolvedTheme, i18n]);
 
   const getTitle = useCallback(() => {
-    if (error) return t("errorTitle", { error });
-    if (theme === "system") return t("titleSystem", { theme: resolvedTheme });
-    return t(`title.${theme}`);
-  }, [error, theme, resolvedTheme, t]);
+    return i18n.getTitle(theme, resolvedTheme, error ? String(error) : null);
+  }, [error, theme, resolvedTheme, i18n]);
 
   return {
     theme,
