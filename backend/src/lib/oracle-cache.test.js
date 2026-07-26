@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 
 vi.mock("./metrics.js", () => ({
   oracleCacheHitTotal: { inc: vi.fn() },
@@ -395,8 +395,13 @@ describe("SmartContractOracleIntegrator", () => {
 
 describe("Circuit Breaker - resetCircuitBreaker", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     resetCircuitBreaker();
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("resets circuit breaker for a specific provider", async () => {
@@ -418,15 +423,16 @@ describe("Circuit Breaker - resetCircuitBreaker", () => {
 
   it("resets all circuit breakers when no provider specified", async () => {
     vi.useFakeTimers();
-    const p1 = { name: "p1", fetch: vi.fn().mockImplementation(() => Promise.reject(new Error("down"))) };
-    const p2 = { name: "p2", fetch: vi.fn().mockImplementation(() => Promise.reject(new Error("down"))) };
-    const integrator = new SmartContractOracleIntegrator({ providers: [p1, p2] });
+    const fn1 = vi.fn().mockImplementation(() => Promise.reject(new Error("down")));
+    const fn2 = vi.fn().mockImplementation(() => Promise.reject(new Error("down")));
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn1 }, { name: "p2", fetch: fn2 }] });
 
     for (let i = 0; i < 5; i++) {
       const pa = integrator.fetch("p1", "x");
-      const pb = integrator.fetch("p2", "x");
       await vi.advanceTimersByTimeAsync(10000);
       await expect(pa).rejects.toThrow();
+      const pb = integrator.fetch("p2", "x");
+      await vi.advanceTimersByTimeAsync(10000);
       await expect(pb).rejects.toThrow();
     }
 
@@ -462,5 +468,426 @@ describe("createDefaultIntegrator", () => {
 
   it("oracleIntegrator singleton is an integrator instance", () => {
     expect(oracleIntegrator).toBeInstanceOf(SmartContractOracleIntegrator);
+  });
+});
+
+describe("Edge Cases — OracleCache", () => {
+  it("handles empty string keys", () => {
+    const c = new OracleCache("t", { maxEntries: 10, ttlMs: 5000 });
+    c.set("", { data: 1 });
+    expect(c.get("").data).toEqual({ data: 1 });
+  });
+
+  it("handles null data in set", () => {
+    const c = new OracleCache("t", { maxEntries: 10, ttlMs: 5000 });
+    c.set("k", null);
+    expect(c.get("k").data).toBeNull();
+  });
+
+  it("handles undefined data in set", () => {
+    const c = new OracleCache("t", { maxEntries: 10, ttlMs: 5000 });
+    c.set("k", undefined);
+    expect(c.get("k").data).toBeUndefined();
+  });
+
+  it("handles large data objects", () => {
+    const c = new OracleCache("t", { maxEntries: 10, ttlMs: 5000 });
+    const large = { arr: new Array(10000).fill("x") };
+    c.set("k", large);
+    expect(c.get("k").data.arr.length).toBe(10000);
+  });
+
+  it("invalidate on missing key does not throw", () => {
+    const c = new OracleCache("t", { maxEntries: 10 });
+    expect(() => c.invalidate("nonexistent")).not.toThrow();
+  });
+
+  it("clear on empty cache returns 0", () => {
+    const c = new OracleCache("t", { maxEntries: 10 });
+    expect(c.clear()).toBe(0);
+  });
+
+  it("handles interleaved set and get operations", () => {
+    const c = new OracleCache("t", { maxEntries: 5, ttlMs: 5000 });
+    for (let i = 0; i < 20; i++) {
+      c.set(`k${i % 5}`, i);
+      c.get(`k${(i + 2) % 5}`);
+    }
+    expect(c.getStats().size).toBeLessThanOrEqual(5);
+  });
+
+  it("handles zero maxEntries gracefully", () => {
+    const c = new OracleCache("t", { maxEntries: 0, ttlMs: 5000 });
+    c.set("a", 1);
+    c.set("b", 2);
+    expect(c.getStats().size).toBeLessThanOrEqual(1);
+    expect(c.get("a").hit).toBe(false);
+    expect(c.get("b").data).toBe(2);
+  });
+});
+
+describe("Edge Cases — SmartContractOracleIntegrator", () => {
+  let integrator;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCircuitBreaker();
+  });
+
+  it("handles empty params object", async () => {
+    const fn = vi.fn().mockResolvedValue({});
+    integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+    const result = await integrator.fetch("p1", "feed", {});
+    expect(result.data).toEqual({});
+    expect(fn).toHaveBeenCalledWith("feed", {});
+  });
+
+  it("handles provider returning null data", async () => {
+    const fn = vi.fn().mockResolvedValue(null);
+    integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+    const result = await integrator.fetch("p1", "feed");
+    expect(result.data).toBeNull();
+  });
+
+  it("handles provider returning undefined data", async () => {
+    const fn = vi.fn().mockResolvedValue(undefined);
+    integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+    const result = await integrator.fetch("p1", "feed");
+    expect(result.data).toBeUndefined();
+  });
+
+  it("isolates caches across providers", async () => {
+    const fn1 = vi.fn().mockResolvedValue("a");
+    const fn2 = vi.fn().mockResolvedValue("b");
+    integrator = new SmartContractOracleIntegrator({
+      providers: [
+        { name: "p1", fetch: fn1 },
+        { name: "p2", fetch: fn2 },
+      ],
+    });
+
+    await integrator.fetch("p1", "feed");
+    await integrator.fetch("p2", "feed");
+
+    expect(fn1).toHaveBeenCalledTimes(1);
+    expect(fn2).toHaveBeenCalledTimes(1);
+  });
+
+  it("handles registerProvider called after construction", () => {
+    integrator = new SmartContractOracleIntegrator();
+    integrator.registerProvider({ name: "late", fetch: vi.fn().mockResolvedValue({}) });
+    expect(integrator.providers.has("late")).toBe(true);
+    expect(integrator.caches.has("late")).toBe(true);
+  });
+
+  it("handles duplicate provider registration", () => {
+    const provider = { name: "dup", fetch: vi.fn().mockResolvedValue({}) };
+    integrator = new SmartContractOracleIntegrator({ providers: [provider] });
+    integrator.registerProvider({ name: "dup", fetch: vi.fn().mockResolvedValue({}) });
+    expect(integrator.providers.size).toBe(1);
+  });
+
+  it("invalidateCache for unknown provider returns 0", () => {
+    integrator = new SmartContractOracleIntegrator();
+    expect(integrator.invalidateCache("ghost", "feed")).toBe(0);
+  });
+
+  it("getCache for unknown provider returns undefined", () => {
+    integrator = new SmartContractOracleIntegrator();
+    expect(integrator.getCache("ghost")).toBeUndefined();
+  });
+
+  it("clearAllCaches on empty integrator returns 0", () => {
+    integrator = new SmartContractOracleIntegrator();
+    expect(integrator.clearAllCaches()).toBe(0);
+  });
+
+  it("handles multiple feeds with different params", async () => {
+    const fn = vi.fn().mockImplementation((feed, params) =>
+      Promise.resolve({ feed, ...params }),
+    );
+    integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    const r1 = await integrator.fetch("p1", "price", { asset: "USDC" });
+    const r2 = await integrator.fetch("p1", "price", { asset: "XLM" });
+    const r3 = await integrator.fetch("p1", "rate", { pair: "USD/EUR" });
+
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(r1.data.asset).toBe("USDC");
+    expect(r2.data.asset).toBe("XLM");
+    expect(r3.data.feed).toBe("rate");
+  });
+
+  it("fetchWithFallback returns first non-null result", async () => {
+    vi.useFakeTimers();
+    const p1 = { name: "p1", fetch: vi.fn().mockImplementation(() => Promise.resolve(null)) };
+    const p2 = { name: "p2", fetch: vi.fn().mockResolvedValue({ price: 2.0 }) };
+    integrator = new SmartContractOracleIntegrator({ providers: [p1, p2] });
+
+    const promise = integrator.fetchWithFallback("price");
+    await vi.advanceTimersByTimeAsync(10000);
+    const result = await promise;
+
+    expect(result.data).toEqual({ price: 2.0 });
+    expect(result.provider).toBe("p2");
+    vi.useRealTimers();
+  });
+
+  it("fetchBatch handles mixed success and failure", async () => {
+    vi.useFakeTimers();
+    const fn = vi.fn()
+      .mockImplementationOnce(() => Promise.resolve({ price: 1.0 }))
+      .mockImplementation(() => Promise.reject(new Error("fail")));
+    integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    const promise = integrator.fetchBatch([
+      { provider: "p1", feed: "good", requestId: "r1" },
+      { provider: "p1", feed: "bad", requestId: "r2" },
+    ]);
+    await vi.advanceTimersByTimeAsync(10000);
+    const { results, errors } = await promise;
+
+    expect(results).toHaveLength(1);
+    expect(errors).toHaveLength(1);
+    expect(results[0].requestId).toBe("r1");
+    expect(errors[0].requestId).toBe("r2");
+    vi.useRealTimers();
+  });
+
+  it("providers with custom TTLs respect their config", async () => {
+    vi.useFakeTimers();
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    integrator = new SmartContractOracleIntegrator({
+      providers: [{ name: "fast", fetch: fn, ttlMs: 100, staleToleranceMs: 0 }],
+    });
+
+    await integrator.fetch("fast", "price");
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(150);
+    await integrator.fetch("fast", "price");
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+});
+
+describe("Edge Cases — Circuit Breaker", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    resetCircuitBreaker();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("recovers fast when circuit breaker resets manually while open", async () => {
+    vi.useFakeTimers();
+    const fn = vi.fn().mockImplementation(() => Promise.reject(new Error("down")));
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    for (let i = 0; i < 5; i++) {
+      const p = integrator.fetch("p1", "x");
+      await vi.advanceTimersByTimeAsync(10000);
+      await expect(p).rejects.toThrow();
+    }
+
+    resetCircuitBreaker("p1");
+    const successFn = vi.fn().mockResolvedValue({ recovered: true });
+    integrator.registerProvider({ name: "p1", fetch: successFn });
+
+    const p = integrator.fetch("p1", "x");
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await p;
+    expect(result.data).toEqual({ recovered: true });
+  });
+
+  it("tracks failures per provider independently", async () => {
+    vi.useFakeTimers();
+    const fn1 = vi.fn().mockImplementation(() => Promise.reject(new Error("down")));
+    const fn2 = vi.fn().mockResolvedValue({ ok: true });
+    const integrator = new SmartContractOracleIntegrator({
+      providers: [
+        { name: "failing", fetch: fn1 },
+        { name: "healthy", fetch: fn2 },
+      ],
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const p = integrator.fetch("failing", "x");
+      await vi.advanceTimersByTimeAsync(10000);
+      await expect(p).rejects.toThrow();
+    }
+
+    const healthyResult = await integrator.fetch("healthy", "x");
+    expect(healthyResult.data).toEqual({ ok: true });
+
+    const metrics = getCircuitBreakerMetrics();
+    expect(metrics["failing"].failures).toBeGreaterThanOrEqual(5);
+    expect(metrics["failing"].state).toBe("open");
+    expect(metrics["healthy"].failures).toBe(0);
+  });
+
+  it("does not break on success after partial failures", async () => {
+    vi.useFakeTimers();
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    for (let i = 0; i < 5; i++) {
+      await integrator.fetch("p1", "x");
+    }
+
+    const metrics = getCircuitBreakerMetrics();
+    expect(metrics["p1"].failures).toBe(0);
+    expect(metrics["p1"].state).toBe("closed");
+  });
+});
+
+describe("Edge Cases — Concurrency and Race Conditions", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    resetCircuitBreaker();
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("handles concurrent fetch calls for same feed", async () => {
+    let callCount = 0;
+    const fn = vi.fn().mockImplementation(async () => {
+      callCount++;
+      await new Promise((r) => setTimeout(r, 10));
+      return { price: callCount };
+    });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    const [r1, r2, r3] = await Promise.all([
+      integrator.fetch("p1", "price"),
+      integrator.fetch("p1", "price"),
+      integrator.fetch("p1", "price"),
+    ]);
+
+    expect(r1.source).toBe("provider");
+    expect(r2.source).toBe("provider");
+    expect(r3.source).toBe("provider");
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("handles concurrent fetch and invalidation", async () => {
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    const results = await Promise.all([
+      integrator.fetch("p1", "price"),
+      integrator.invalidateCache("p1", "price"),
+      integrator.fetch("p1", "price"),
+    ]);
+
+    expect(results[0].data).toEqual({ price: 1.0 });
+    expect(results[2].data).toEqual({ price: 1.0 });
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles concurrent clear and fetch", async () => {
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    await integrator.fetch("p1", "price");
+
+    await Promise.all([
+      integrator.clearAllCaches(),
+      integrator.fetch("p1", "price"),
+    ]);
+
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("handles many rapid sequential operations", async () => {
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    for (let i = 0; i < 100; i++) {
+      await integrator.fetch("p1", `feed-${i}`);
+    }
+
+    const stats = integrator.getStats();
+    expect(stats.p1.size).toBe(100);
+    expect(fn).toHaveBeenCalledTimes(100);
+  });
+});
+
+describe("Edge Cases — Prometheus Metrics Integration", () => {
+  let oracleCacheHitTotal, oracleCacheMissTotal, oracleFetchDuration, oracleFetchErrorsTotal, oracleCircuitBreakerTripsTotal;
+
+  beforeAll(async () => {
+    const metrics = await import("./metrics.js");
+    oracleCacheHitTotal = metrics.oracleCacheHitTotal;
+    oracleCacheMissTotal = metrics.oracleCacheMissTotal;
+    oracleFetchDuration = metrics.oracleFetchDuration;
+    oracleFetchErrorsTotal = metrics.oracleFetchErrorsTotal;
+    oracleCircuitBreakerTripsTotal = metrics.oracleCircuitBreakerTripsTotal;
+  });
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    resetCircuitBreaker();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("records cache hit metrics", async () => {
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    await integrator.fetch("p1", "price");
+    await integrator.fetch("p1", "price");
+
+    expect(oracleCacheHitTotal.inc).toHaveBeenCalledWith({ provider: "p1" });
+    expect(oracleCacheMissTotal.inc).toHaveBeenCalledWith({ provider: "p1" });
+  });
+
+  it("records fetch duration on success", async () => {
+    const fn = vi.fn().mockResolvedValue({ price: 1.0 });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    await integrator.fetch("p1", "price");
+
+    expect(oracleFetchDuration.observe).toHaveBeenCalledWith(
+      { provider: "p1", result: "success" },
+      expect.any(Number),
+    );
+  });
+
+  it("records fetch errors and circuit breaker trips", async () => {
+    vi.useFakeTimers();
+    const fn = vi.fn().mockImplementation(async () => {
+      const err = new Error("timeout");
+      err.code = "ETIMEDOUT";
+      throw err;
+    });
+    const integrator = new SmartContractOracleIntegrator({ providers: [{ name: "p1", fetch: fn }] });
+
+    for (let i = 0; i < 5; i++) {
+      const p = integrator.fetch("p1", "price");
+      await vi.advanceTimersByTimeAsync(10000);
+      await expect(p).rejects.toThrow();
+    }
+
+    expect(oracleFetchErrorsTotal.inc).toHaveBeenCalledWith(
+      { provider: "p1", error_type: "ETIMEDOUT" },
+    );
+    expect(oracleCircuitBreakerTripsTotal.inc).toHaveBeenCalledWith({ provider: "p1" });
+    expect(oracleFetchDuration.observe).toHaveBeenCalledWith(
+      { provider: "p1", result: "error" },
+      expect.any(Number),
+    );
+    vi.useRealTimers();
   });
 });

@@ -572,26 +572,43 @@
     "submitAnother": "Enviar outro",
     "successTitle": "KYC enviado com sucesso!",
     "successDescription": "Sua verificacao KYC foi enviada e esta em revisao.",
-    "dash": "—",
-    "loadingStep": "Carregando etapa…",
-    "savingStep": "Salvando etapa…",
-    "stepError": "Falha ao salvar esta etapa. Tente novamente.",
-    "retryStep": "Tentar novamente",
-    "dismissError": "Fechar erro",
-    "errorHeading": "Algo deu errado",
-    "uploadingFile": "Enviando {name}…",
-    "uploadSuccess": "{name} enviado",
-    "uploadError": "Falha ao enviar {name}. Tente novamente.",
-    "retryUpload": "Tentar novamente",
-    "filePreview": "Pre-visualizacao: {name}",
-    "removeFile": "Remover {name}",
-    "processingSubmission": "Processando seu envio…",
-    "submittingStep": "Etapa {step} de {total}",
-    "networkError": "Erro de rede. Verifique sua conexao e tente novamente.",
-    "stepLoading": "Carregando informacoes de {step}…",
-    "progressLabel": "Progresso do formulario: etapa {current} de {total}",
-    "stepComplete": "{step} concluido",
-    "navigatingTo": "Navegando para {step}"
+    "dash": "—"
+  },
+  "darkModeTheme": {
+    "loading": "Carregando configuracoes de tema",
+    "errorCleared": "Erro eliminado. Tentando alternar o tema.",
+    "switchingTo": "Alternando para o tema {theme}.",
+    "themeChanged": "Tema alterado para {theme}.",
+    "themeError": "Falha ao alternar o tema. Tente novamente.",
+    "currentTheme": "Tema atual: {theme}",
+    "systemTheme": "Sistema ({theme})",
+    "ariaError": "Alternador de tema com erro — pressione para tentar novamente",
+    "ariaLabel": "Alternador de tema, tema atual: {theme}. Pressione para ir ao proximo tema.",
+    "ariaLoading": "O tema esta carregando",
+    "errorTitle": "Erro de tema: {error}. Pressione para tentar novamente.",
+    "titleSystem": "Tema: Sistema ({theme})",
+    "titleLight": "Tema: Claro",
+    "titleDark": "Tema: Escuro",
+    "description": "Alterne entre os temas claro, escuro e do sistema. O sistema segue a preferencia do dispositivo. Pressione Espaco ou Enter para ativar.",
+    "preferenceLabel": "Preferencia de tema",
+    "preferenceSaved": "Preferencia de tema salva",
+    "preferenceRestored": "Preferencia de tema restaurada",
+    "themes": {
+      "light": "claro",
+      "dark": "escuro",
+      "system": "sistema"
+    },
+    "themeNames": {
+      "light": "Claro",
+      "dark": "Escuro",
+      "system": "Sistema"
+    },
+    "sr": {
+      "sunIcon": "Icone de sol — modo claro ativo",
+      "moonIcon": "Icone de lua — modo escuro ativo",
+      "systemIcon": "Icone de monitor — tema do sistema ativo",
+      "errorIcon": "Icone de erro — falha ao aplicar o tema"
+    }
   },
   "portfolioChartWidget": {
     "title": "Valor do portafolio",

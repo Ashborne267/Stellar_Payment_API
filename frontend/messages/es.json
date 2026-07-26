@@ -572,26 +572,43 @@
     "submitAnother": "Enviar otro",
     "successTitle": "KYC enviado exitosamente!",
     "successDescription": "Tu verificacion KYC ha sido enviada y esta en revision.",
-    "dash": "—",
-    "loadingStep": "Cargando paso…",
-    "savingStep": "Guardando paso…",
-    "stepError": "Error al guardar este paso. Intentalo de nuevo.",
-    "retryStep": "Reintentar",
-    "dismissError": "Cerrar error",
-    "errorHeading": "Algo salio mal",
-    "uploadingFile": "Subiendo {name}…",
-    "uploadSuccess": "{name} subido",
-    "uploadError": "Error al subir {name}. Intentalo de nuevo.",
-    "retryUpload": "Reintentar subida",
-    "filePreview": "Vista previa: {name}",
-    "removeFile": "Eliminar {name}",
-    "processingSubmission": "Procesando tu envio…",
-    "submittingStep": "Paso {step} de {total}",
-    "networkError": "Error de red. Revisa tu conexion e intentalo de nuevo.",
-    "stepLoading": "Cargando informacion de {step}…",
-    "progressLabel": "Progreso del formulario: paso {current} de {total}",
-    "stepComplete": "{step} completado",
-    "navigatingTo": "Navegando a {step}"
+    "dash": "—"
+  },
+  "darkModeTheme": {
+    "loading": "Cargando configuracion del tema",
+    "errorCleared": "Error eliminado. Intentando cambiar el tema.",
+    "switchingTo": "Cambiando al tema {theme}.",
+    "themeChanged": "Tema cambiado a {theme}.",
+    "themeError": "Error al cambiar el tema. Intentalo de nuevo.",
+    "currentTheme": "Tema actual: {theme}",
+    "systemTheme": "Sistema ({theme})",
+    "ariaError": "Cambio de tema con error — presiona para reintentar",
+    "ariaLabel": "Cambio de tema, tema actual: {theme}. Presiona para pasar al siguiente tema.",
+    "ariaLoading": "El tema esta cargando",
+    "errorTitle": "Error de tema: {error}. Presiona para reintentar.",
+    "titleSystem": "Tema: Sistema ({theme})",
+    "titleLight": "Tema: Claro",
+    "titleDark": "Tema: Oscuro",
+    "description": "Cambia entre los temas claro, oscuro y del sistema. El sistema sigue la preferencia del dispositivo. Presiona Espacio o Intro para activar.",
+    "preferenceLabel": "Preferencia de tema",
+    "preferenceSaved": "Preferencia de tema guardada",
+    "preferenceRestored": "Preferencia de tema restaurada",
+    "themes": {
+      "light": "claro",
+      "dark": "oscuro",
+      "system": "sistema"
+    },
+    "themeNames": {
+      "light": "Claro",
+      "dark": "Oscuro",
+      "system": "Sistema"
+    },
+    "sr": {
+      "sunIcon": "Icono de sol — modo claro activo",
+      "moonIcon": "Icono de luna — modo oscuro activo",
+      "systemIcon": "Icono de monitor — tema del sistema activo",
+      "errorIcon": "Icono de error — no se pudo aplicar el tema"
+    }
   },
   "portfolioChartWidget": {
     "title": "Valor del portafolio",
