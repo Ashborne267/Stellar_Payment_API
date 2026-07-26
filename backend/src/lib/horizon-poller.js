@@ -58,6 +58,66 @@ import {
   rateLimitExceededTotal,
 } from "./metrics.js";
 
+// ── Merchant Config Cache ──────────────────────────────────────────────────────
+
+/**
+ * Robust in-memory LRU cache for merchant notification configs.
+ * Reduces duplicate DB lookups across poll cycles and within a single cycle.
+ */
+class MerchantConfigCache {
+  constructor(maxEntries = 1000, ttlMs = 5 * 60 * 1000) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlMs;
+    this.cache = new Map();
+  }
+
+  get(merchantId) {
+    const entry = this.cache.get(merchantId);
+    if (!entry) return null;
+    if (Date.now() - entry.insertedAt > this.ttlMs) {
+      this.cache.delete(merchantId);
+      return null;
+    }
+    // LRU touch
+    this.cache.delete(merchantId);
+    this.cache.set(merchantId, entry);
+    return entry.data;
+  }
+
+  set(merchantId, data) {
+    if (this.cache.has(merchantId)) {
+      this.cache.delete(merchantId);
+    }
+    if (this.cache.size >= this.maxEntries) {
+      const oldest = this.cache.keys().next().value;
+      this.cache.delete(oldest);
+    }
+    this.cache.set(merchantId, { data, insertedAt: Date.now() });
+  }
+
+  invalidate(merchantId) {
+    if (merchantId) {
+      this.cache.delete(merchantId);
+      return;
+    }
+    this.cache.clear();
+  }
+
+  getStats() {
+    return {
+      size: this.cache.size,
+      maxEntries: this.maxEntries,
+      ttlMs: this.ttlMs,
+    };
+  }
+}
+
+const merchantConfigCache = new MerchantConfigCache();
+
+export function getMerchantConfigCacheStats() {
+  return merchantConfigCache.getStats();
+}
+
 /** Prometheus label set identifying the Ledger Monitor's Horizon rate limiter. */
 const RATE_LIMIT_LABELS = { endpoint: "ledger_monitor", type: "horizon" };
 
@@ -820,31 +880,52 @@ async function preloadMerchantConfigs(payments) {
     ];
     if (merchantIds.length === 0) return cache;
 
-    const { data, error } = await supabase
-      .from("merchants")
-      .select(`id, ${MERCHANT_NOTIFICATION_FIELDS}`)
-      .in("id", merchantIds);
-
-    if (error) {
-      logger.warn(
-        { err: error, merchantCount: merchantIds.length },
-        "Horizon poller: batch merchant preload failed — falling back to per-payment lookups",
-      );
-      return cache;
-    }
-
-    for (const merchant of data ?? []) {
-      cache.set(merchant.id, merchant);
-    }
-    // Record cache misses as null so confirmation never re-queries them.
+    const cached = [];
+    const toFetch = [];
     for (const id of merchantIds) {
-      if (!cache.has(id)) cache.set(id, null);
+      const entry = merchantConfigCache.get(id);
+      if (entry) {
+        cached.push({ id, entry });
+      } else {
+        toFetch.push(id);
+      }
+    }
+
+    for (const { id, entry } of cached) {
+      cache.set(id, entry);
+    }
+
+    if (toFetch.length > 0) {
+      const { data, error } = await supabase
+        .from("merchants")
+        .select(`id, ${MERCHANT_NOTIFICATION_FIELDS}`)
+        .in("id", toFetch);
+
+      if (error) {
+        logger.warn(
+          { err: error, merchantCount: toFetch.length },
+          "Horizon poller: batch merchant preload failed — falling back to per-payment lookups",
+        );
+        return cache;
+      }
+
+      for (const merchant of data ?? []) {
+        merchantConfigCache.set(merchant.id, merchant);
+        cache.set(merchant.id, merchant);
+      }
+      for (const id of toFetch) {
+        if (!cache.has(id)) {
+          merchantConfigCache.set(id, null);
+          cache.set(id, null);
+        }
+      }
     }
   } catch (err) {
     logger.warn(
       { err },
       "Horizon poller: batch merchant preload errored — falling back to per-payment lookups",
     );
+    merchantConfigCache.invalidate(null);
     return new Map();
   }
   return cache;
@@ -859,6 +940,12 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
     return cache.get(merchantId);
   }
 
+  const merchant = merchantConfigCache.get(merchantId);
+  if (merchant !== null && merchant !== undefined) {
+    cache.set(merchantId, merchant);
+    return merchant;
+  }
+
   const { data, error } = await supabase
     .from("merchants")
     .select(MERCHANT_NOTIFICATION_FIELDS)
@@ -871,10 +958,12 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
       "Horizon poller: failed to load merchant notification config",
     );
     cache.set(merchantId, null);
+    merchantConfigCache.set(merchantId, null);
     return null;
   }
 
-  const merchant = data ?? null;
-  cache.set(merchantId, merchant);
-  return merchant;
+  const result = data ?? null;
+  cache.set(merchantId, result);
+  merchantConfigCache.set(merchantId, result);
+  return result;
 }

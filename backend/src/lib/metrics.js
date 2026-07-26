@@ -109,6 +109,41 @@ export const signatureVerificationReplayAttempts = new client.Counter({
   help: "Total number of detected signature replay attempts",
 });
 
+export const txSignatureVerificationTotal = new client.Counter({
+  name: "tx_signature_verification_total",
+  help: "Total number of transaction signature verifications",
+  labelNames: ["outcome"], // valid, invalid
+});
+
+export const txSignatureVerificationLatency = new client.Histogram({
+  name: "tx_signature_verification_latency_seconds",
+  help: "Latency of transaction signature verification",
+  labelNames: ["label"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const txSignatureVerificationErrors = new client.Counter({
+  name: "tx_signature_verification_errors_total",
+  help: "Total number of transaction signature verification errors",
+  labelNames: ["error_type"], // validation_failure, replay_attempt, verification_exception, invalid_signature
+});
+
+export const txSignatureReplayAttempts = new client.Counter({
+  name: "tx_signature_replay_attempts_total",
+  help: "Total number of replay attempts detected by the transaction signer",
+});
+
+export const txSignatureValidationFailures = new client.Counter({
+  name: "tx_signature_validation_failures_total",
+  help: "Total number of txHash validation failures",
+  labelNames: ["reason"], // empty_or_non_string, invalid_format
+});
+
+export const txSignatureCacheSize = new client.Gauge({
+  name: "tx_signature_cache_size",
+  help: "Current number of entries in the transaction signer replay cache",
+});
+
 /**
  * Ledger Monitor Metrics
  */
@@ -299,6 +334,12 @@ register.registerMetric(slowQueryCount);
 register.registerMetric(signatureVerificationTotal);
 register.registerMetric(signatureVerificationDuration);
 register.registerMetric(signatureVerificationReplayAttempts);
+register.registerMetric(txSignatureVerificationTotal);
+register.registerMetric(txSignatureVerificationLatency);
+register.registerMetric(txSignatureVerificationErrors);
+register.registerMetric(txSignatureReplayAttempts);
+register.registerMetric(txSignatureValidationFailures);
+register.registerMetric(txSignatureCacheSize);
 register.registerMetric(ledgerMonitorCycleDuration);
 register.registerMetric(ledgerMonitorPaymentsChecked);
 register.registerMetric(ledgerMonitorCircuitBreakerTrips);

@@ -19,6 +19,14 @@ import {
   createTransactionSignerRedisStore,
 } from "./transaction-signer-rate-limit.js";
 import { logger } from "./logger.js";
+import {
+  txSignatureVerificationTotal,
+  txSignatureVerificationLatency,
+  txSignatureVerificationErrors,
+  txSignatureReplayAttempts,
+  txSignatureCacheSize,
+  txSignatureValidationFailures,
+} from "./metrics.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -61,11 +69,13 @@ function recordVerifiedHash(txHash) {
     _replayCache.delete(oldest);
   }
   _replayCache.set(txHash, { verifiedAt: Date.now() });
+  txSignatureCacheSize.set(_replayCache.size);
 }
 
 /** Exposed for tests only. */
 export function clearReplayCache() {
   _replayCache.clear();
+  txSignatureCacheSize.set(0);
 }
 
 // ── Input Validation ──────────────────────────────────────────────────────────
@@ -78,9 +88,11 @@ export function clearReplayCache() {
  */
 export function validateTxHash(txHash) {
   if (typeof txHash !== "string" || txHash.trim() === "") {
+    txSignatureValidationFailures.inc({ reason: "empty_or_non_string" });
     return { valid: false, reason: "txHash must be a non-empty string" };
   }
   if (!TX_HASH_REGEX.test(txHash)) {
+    txSignatureValidationFailures.inc({ reason: "invalid_format" });
     return { valid: false, reason: "txHash must be 64 lowercase hex characters" };
   }
   return { valid: true };
@@ -96,9 +108,13 @@ export function validateTxHash(txHash) {
  * @returns {Promise<{ valid: boolean, reason?: string, replay?: boolean, [key: string]: unknown }>}
  */
 export async function verifyTransactionSignatureSecure(txHash, options = {}) {
+  const timerLabel = "transaction_signer";
+  const timerEnd = txSignatureVerificationLatency.startTimer({ label: timerLabel });
+
   // 1. Format validation
   const formatCheck = validateTxHash(txHash);
   if (!formatCheck.valid) {
+    txSignatureVerificationErrors.inc({ error_type: "validation_failure" });
     logger.warn({ txHash: String(txHash).slice(0, 10), reason: formatCheck.reason },
       "TransactionSigner: invalid txHash format rejected");
     return { valid: false, reason: formatCheck.reason };
@@ -109,6 +125,8 @@ export async function verifyTransactionSignatureSecure(txHash, options = {}) {
   // 2. Replay detection — prune stale entries first
   pruneReplayCache();
   if (_replayCache.has(normalizedHash)) {
+    txSignatureReplayAttempts.inc();
+    txSignatureVerificationErrors.inc({ error_type: "replay_attempt" });
     logger.warn({ txHash: normalizedHash },
       "TransactionSigner: replay attempt detected — txHash already verified");
     return { valid: false, reason: "replay: txHash was already verified", replay: true };
@@ -119,26 +137,31 @@ export async function verifyTransactionSignatureSecure(txHash, options = {}) {
   try {
     result = await verifyTransactionSignature(normalizedHash, options);
   } catch (err) {
+    txSignatureVerificationErrors.inc({ error_type: "verification_exception" });
     logger.warn({ err, txHash: normalizedHash },
       "TransactionSigner: unexpected error during signature verification");
     return { valid: false, reason: "verification error: " + (err?.message ?? "unknown") };
   }
 
-  // 4. Record in replay cache on success
+  // 4. Record metrics based on outcome
   if (result?.valid) {
     recordVerifiedHash(normalizedHash);
+    txSignatureVerificationTotal.inc({ outcome: "valid" });
     logger.info({
       txHash: normalizedHash,
       isMultiSig: result.isMultiSig,
       signatureCount: result.signatureCount,
     }, "TransactionSigner: signature verified successfully");
   } else {
+    txSignatureVerificationTotal.inc({ outcome: "invalid" });
+    txSignatureVerificationErrors.inc({ error_type: "invalid_signature" });
     logger.warn({
       txHash: normalizedHash,
       reason: result?.reason ?? "unknown",
     }, "TransactionSigner: signature verification failed");
   }
 
+  timerEnd();
   return result ?? { valid: false, reason: "verifier returned no result" };
 }
 
