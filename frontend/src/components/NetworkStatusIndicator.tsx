@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { motion, AnimatePresence, type Variants, useAnimation } from "framer-motion";
+import { motion, AnimatePresence, useAnimation } from "framer-motion";
 import { useTranslations } from "next-intl";
 import { useNetworkStatusStore } from "@/lib/network-status-store";
 import {
@@ -126,7 +126,7 @@ export const NetworkStatusIndicator: React.FC<
     useNetworkStatusStore();
 
   const colors = getStatusColor(status);
-  const adaptiveTransition = getAdaptiveTransition({ duration: 0.3, ease: [0.16, 1, 0.3, 1] });
+  const adaptiveTransition = getAdaptiveTransition({ duration: 0.3, ease: [0.16, 1, 0.3, 1] }, reducedMotion);
 
   useEffect(() => {
     if (!reducedMotion) controls.start("flash");
@@ -148,8 +148,8 @@ export const NetworkStatusIndicator: React.FC<
       tabIndex={enableKeyboardNavigation ? 0 : undefined}
       onHoverStart={() => setIsHovered(true)}
       onHoverEnd={() => setIsHovered(false)}
-      onFocusStart={() => setIsFocused(true)}
-      onFocusEnd={() => setIsFocused(false)}
+      onFocus={() => setIsFocused(true)}
+      onBlur={() => setIsFocused(false)}
     >
       {/* Background hover effect */}
       {enableMicroInteractions && (

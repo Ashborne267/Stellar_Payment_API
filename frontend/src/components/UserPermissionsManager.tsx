@@ -7,7 +7,7 @@ import { useTranslations } from "next-intl";
 import { usePermissionsStore, type Permission } from "@/hooks/usePermissionsStore";
 
 export interface UserPermissionsManagerProps {
-  userId: string;
+  userId?: string;
   showCategories?: boolean;
   isReadOnly?: boolean;
   onPermissionsChange?: (permissions: Permission[]) => Promise<void> | void;

@@ -19,6 +19,14 @@ export default function AccessibilityContrastToggle() {
   const iconTransition = { duration: shouldReduceMotion ? 0 : 0.2 };
   const loadingDuration = shouldReduceMotion ? 0.1 : 0.8;
 
+  const getNextTheme = useCallback((): string => {
+    const themes = ["light", "dark", "system"];
+    const currentIndex = theme ? themes.indexOf(theme) : 0;
+    const nextIndex = (currentIndex + 1) % themes.length;
+    const nextTheme = themes[nextIndex];
+    return nextTheme === "system" ? t("systemTheme", { theme: resolvedTheme }) : t(`theme.${nextTheme}`);
+  }, [theme, resolvedTheme, t]);
+
   const handleContrastToggle = useCallback(async () => {
     if (error) {
       clearError();
@@ -45,14 +53,6 @@ export default function AccessibilityContrastToggle() {
       setTimeout(() => setLoadingState("idle"), 2000);
     }
   }, [toggleTheme, error, clearError, t, getNextTheme]);
-
-  const getNextTheme = useCallback((): string => {
-    const themes = ["light", "dark", "system"];
-    const currentIndex = theme ? themes.indexOf(theme) : 0;
-    const nextIndex = (currentIndex + 1) % themes.length;
-    const nextTheme = themes[nextIndex];
-    return nextTheme === "system" ? t("systemTheme", { theme: resolvedTheme }) : t(`theme.${nextTheme}`);
-  }, [theme, resolvedTheme, t]);
 
   useEffect(() => {
     if (isMounted && !isLoading && !error) {

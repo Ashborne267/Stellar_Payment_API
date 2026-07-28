@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode, useMemo } from "react";
+import { createContext, useContext, useEffect, useCallback, useRef, ReactNode, useMemo, useReducer } from "react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 
 export type ThemeMode = "light" | "dark" | "system";
@@ -110,7 +110,7 @@ export function ThemeProvider({
   enableSystem = true,
   forcedTheme,
 }: ThemeProviderProps) {
-  const [state, dispatch] = useReducer(themeReducer, {
+  const [state] = useReducer(themeReducer, {
     theme: defaultTheme,
     resolvedTheme: undefined,
     isMounted: false,
@@ -135,10 +135,7 @@ export function ThemeProvider({
     [forcedTheme]
   );
 
-  const themeRef = useRef(theme);
   const resolvedRef = useRef(resolvedTheme);
-
-  useEffect(() => { themeRef.current = theme; }, [theme]);
   useEffect(() => { resolvedRef.current = resolvedTheme; }, [resolvedTheme]);
 
   const clearError = useCallback(() => {

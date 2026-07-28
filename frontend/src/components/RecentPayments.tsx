@@ -541,7 +541,12 @@ export const RecentPayments = memo(function RecentPayments({
           role="status"
           aria-live="polite"
         >
-          {hasActiveFilters ? `Filters active: ${Object.entries(filters).filter(([k,v]) => v && v !== 'all' && k !== 'page' && k !== 'limit').map(([k,v]) => `${k}: ${v}`).join(', ')}` : "No filters active"}
+          {hasActiveFilters
+            ? "Filters active: " + Object.entries(filters)
+                .filter(([k, v]) => v && v !== "all" && k !== "page" && k !== "limit")
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(", ")
+            : "No filters active"}
         </div>
 
         {hasActiveFilters && (
@@ -802,7 +807,7 @@ export const RecentPayments = memo(function RecentPayments({
       />
     </div>
   );
-}
+});
 
 function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
   return (
@@ -830,5 +835,5 @@ function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
     </span>
   );
 }
-e x p o r t   d e f a u l t   R e c e n t P a y m e n t s ;  
- 
+
+export default RecentPayments;

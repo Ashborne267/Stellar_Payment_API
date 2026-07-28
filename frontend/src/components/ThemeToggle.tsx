@@ -197,7 +197,6 @@ export default function ThemeToggle() {
       <div id="theme-description" className="sr-only">
         Use this button to cycle through light, dark, and system themes. The system theme follows your device preference.
       </div>
-      </button>
     </>
   );
 }

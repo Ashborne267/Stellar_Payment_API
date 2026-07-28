@@ -316,7 +316,7 @@ function SuccessCard({ created, onReset, t }: SuccessCardProps) {
               </svg>
               {t("shareLink")}
             </button>
-          </div>
+          </motion.div>
         </motion.div>
 
         {/* Reset link */}
