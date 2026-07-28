@@ -33,8 +33,8 @@ const modalVariants: Variants = {
     y: 0,
     transition: {
       duration: 0.4,
-      ease: [0.32, 0.72, 0.0, 1.0],
-      type: "spring",
+      ease: [0.32, 0.72, 0.0, 1.0] as [number, number, number, number],
+      type: "spring" as const,
       stiffness: 300,
       damping: 30,
     },
@@ -43,7 +43,7 @@ const modalVariants: Variants = {
     scale: 0.85,
     opacity: 0,
     y: 30,
-    transition: { duration: 0.2, ease: [0.32, 0.72, 0.0, 1.0] },
+    transition: { duration: 0.2, ease: [0.32, 0.72, 0.0, 1.0] as [number, number, number, number] },
   },
 };
 
@@ -67,13 +67,14 @@ interface MultisigApprovalModalProps {
   readonly isOpen: boolean;
   readonly onClose: () => void;
   readonly networkPassphrase: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly transaction?: any;
 }
 
 export default function MultisigApprovalModal({
   isOpen,
   onClose,
-  networkPassphrase,
+  networkPassphrase: _networkPassphrase,
   transaction: initialTransaction,
 }: MultisigApprovalModalProps) {
   const t = useTranslations("multisigModal");
@@ -97,7 +98,7 @@ export default function MultisigApprovalModal({
 
   const {
     setTransaction,
-    setCurrentStep,
+    setCurrentStep: _setCurrentStep,
     signTransaction,
     submitTransaction,
     resetModal,
