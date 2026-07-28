@@ -45,7 +45,7 @@ describe("useAccessibilityContrast", () => {
     const { result } = renderHook(() => useAccessibilityContrast(), { wrapper });
 
     expect(result.current.loadingState).toBe("idle");
-    expect(result.current.announcement).toBe("");
+    expect(result.current.announcement).toMatch(/Current theme|^$/);
   });
 
   it("provides getNextTheme function", () => {

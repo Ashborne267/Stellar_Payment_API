@@ -541,12 +541,7 @@ export const RecentPayments = memo(function RecentPayments({
           role="status"
           aria-live="polite"
         >
-          {hasActiveFilters
-            ? "Filters active: " + Object.entries(filters)
-                .filter(([k, v]) => v && v !== "all" && k !== "page" && k !== "limit")
-                .map(([k, v]) => `${k}: ${v}`)
-                .join(", ")
-            : "No filters active"}
+          {hasActiveFilters ? `Filters active: ${Object.entries(filters).filter(([k,v]) => v && v !== 'all' && k !== 'page' && k !== 'limit').map(([k,v]) => `${k}: ${v}`).join(', ')}` : "No filters active"}
         </div>
 
         {hasActiveFilters && (
@@ -835,5 +830,4 @@ function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
     </span>
   );
 }
-
 export default RecentPayments;

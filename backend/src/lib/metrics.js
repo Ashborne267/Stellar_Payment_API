@@ -109,6 +109,41 @@ export const signatureVerificationReplayAttempts = new client.Counter({
   help: "Total number of detected signature replay attempts",
 });
 
+export const txSignatureVerificationTotal = new client.Counter({
+  name: "tx_signature_verification_total",
+  help: "Total number of transaction signature verifications",
+  labelNames: ["outcome"], // valid, invalid
+});
+
+export const txSignatureVerificationLatency = new client.Histogram({
+  name: "tx_signature_verification_latency_seconds",
+  help: "Latency of transaction signature verification",
+  labelNames: ["label"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const txSignatureVerificationErrors = new client.Counter({
+  name: "tx_signature_verification_errors_total",
+  help: "Total number of transaction signature verification errors",
+  labelNames: ["error_type"], // validation_failure, replay_attempt, verification_exception, invalid_signature
+});
+
+export const txSignatureReplayAttempts = new client.Counter({
+  name: "tx_signature_replay_attempts_total",
+  help: "Total number of replay attempts detected by the transaction signer",
+});
+
+export const txSignatureValidationFailures = new client.Counter({
+  name: "tx_signature_validation_failures_total",
+  help: "Total number of txHash validation failures",
+  labelNames: ["reason"], // empty_or_non_string, invalid_format
+});
+
+export const txSignatureCacheSize = new client.Gauge({
+  name: "tx_signature_cache_size",
+  help: "Current number of entries in the transaction signer replay cache",
+});
+
 /**
  * Ledger Monitor Metrics
  */
@@ -128,6 +163,17 @@ export const ledgerMonitorPaymentsChecked = new client.Counter({
 export const ledgerMonitorCircuitBreakerTrips = new client.Counter({
   name: "ledger_monitor_circuit_breaker_trips_total",
   help: "Total number of times the circuit breaker was tripped",
+});
+
+export const ledgerMonitorBatchSize = new client.Gauge({
+  name: "ledger_monitor_batch_size",
+  help: "Number of pending payments fetched in the most recent ledger monitor cycle",
+});
+
+export const ledgerMonitorRateLimiterWaitSeconds = new client.Histogram({
+  name: "ledger_monitor_rate_limiter_wait_seconds",
+  help: "Time spent waiting for a Horizon rate-limit token during a ledger monitor cycle",
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
 });
 
 /**
@@ -191,6 +237,88 @@ export const dbPoolerSignatureVerified = new client.Counter({
   labelNames: ["result"], // valid, invalid, skipped
 });
 
+/**
+ * Exchange Rate Service Metrics
+ */
+
+export const exchangeRateQuoteRequests = new client.Counter({
+  name: "exchange_rate_quote_requests_total",
+  help: "Total number of exchange rate quote requests",
+  labelNames: ["source_asset", "dest_asset", "result"], // success, not_found, error, rate_limited, same_asset, not_pending
+});
+
+export const exchangeRateQuoteDuration = new client.Histogram({
+  name: "exchange_rate_quote_duration_seconds",
+  help: "Time taken to resolve an exchange rate quote in seconds",
+  labelNames: ["source_asset", "dest_asset", "result"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const exchangeRateHorizonCalls = new client.Counter({
+  name: "exchange_rate_horizon_calls_total",
+  help: "Total number of Horizon API calls made by the exchange rate service",
+  labelNames: ["operation", "status"], // operation: strict_receive_paths, load_account; status: success, error
+});
+
+export const exchangeRateSourceAccountValidation = new client.Counter({
+  name: "exchange_rate_source_account_validation_total",
+  help: "Total number of source account validations",
+  labelNames: ["result"], // valid, not_found, error, skipped
+});
+
+export const exchangeRateSlippageApplied = new client.Counter({
+  name: "exchange_rate_slippage_applied_total",
+  help: "Total number of exchange rate quotes with slippage applied",
+  labelNames: ["slippage_pct"],
+});
+
+/**
+ * Smart Contract Oracle Integrator Metrics (Issue #TBD)
+ */
+
+export const oracleCacheHitTotal = new client.Counter({
+  name: "oracle_cache_hit_total",
+  help: "Total number of oracle cache hits",
+  labelNames: ["provider"],
+});
+
+export const oracleCacheMissTotal = new client.Counter({
+  name: "oracle_cache_miss_total",
+  help: "Total number of oracle cache misses",
+  labelNames: ["provider"],
+});
+
+export const oracleCacheSize = new client.Gauge({
+  name: "oracle_cache_size",
+  help: "Current number of entries in the oracle cache",
+  labelNames: ["provider"],
+});
+
+export const oracleFetchDuration = new client.Histogram({
+  name: "oracle_fetch_duration_seconds",
+  help: "Time taken to fetch oracle data from provider",
+  labelNames: ["provider", "result"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+});
+
+export const oracleFetchErrorsTotal = new client.Counter({
+  name: "oracle_fetch_errors_total",
+  help: "Total number of oracle fetch errors",
+  labelNames: ["provider", "error_type"],
+});
+
+export const oracleStaleDataServedTotal = new client.Counter({
+  name: "oracle_stale_data_served_total",
+  help: "Total number of times stale oracle data was served as fallback",
+  labelNames: ["provider"],
+});
+
+export const oracleCircuitBreakerTripsTotal = new client.Counter({
+  name: "oracle_circuit_breaker_trips_total",
+  help: "Total number of times the oracle circuit breaker was tripped",
+  labelNames: ["provider"],
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -206,9 +334,17 @@ register.registerMetric(slowQueryCount);
 register.registerMetric(signatureVerificationTotal);
 register.registerMetric(signatureVerificationDuration);
 register.registerMetric(signatureVerificationReplayAttempts);
+register.registerMetric(txSignatureVerificationTotal);
+register.registerMetric(txSignatureVerificationLatency);
+register.registerMetric(txSignatureVerificationErrors);
+register.registerMetric(txSignatureReplayAttempts);
+register.registerMetric(txSignatureValidationFailures);
+register.registerMetric(txSignatureCacheSize);
 register.registerMetric(ledgerMonitorCycleDuration);
 register.registerMetric(ledgerMonitorPaymentsChecked);
 register.registerMetric(ledgerMonitorCircuitBreakerTrips);
+register.registerMetric(ledgerMonitorBatchSize);
+register.registerMetric(ledgerMonitorRateLimiterWaitSeconds);
 register.registerMetric(rateLimitExceededTotal);
 register.registerMetric(rateLimitRequestsTotal);
 register.registerMetric(queryCacheHitTotal);
@@ -217,5 +353,17 @@ register.registerMetric(queryCacheSize);
 register.registerMetric(dbPoolerRateLimitExceeded);
 register.registerMetric(dbPoolerQueryTotal);
 register.registerMetric(dbPoolerSignatureVerified);
+register.registerMetric(exchangeRateQuoteRequests);
+register.registerMetric(exchangeRateQuoteDuration);
+register.registerMetric(exchangeRateHorizonCalls);
+register.registerMetric(exchangeRateSourceAccountValidation);
+register.registerMetric(exchangeRateSlippageApplied);
+register.registerMetric(oracleCacheHitTotal);
+register.registerMetric(oracleCacheMissTotal);
+register.registerMetric(oracleCacheSize);
+register.registerMetric(oracleFetchDuration);
+register.registerMetric(oracleFetchErrorsTotal);
+register.registerMetric(oracleStaleDataServedTotal);
+register.registerMetric(oracleCircuitBreakerTripsTotal);
 
 export { register };

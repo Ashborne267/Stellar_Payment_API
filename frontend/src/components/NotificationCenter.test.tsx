@@ -4,6 +4,18 @@ import userEvent from '@testing-library/user-event';
 import NotificationCenter from './NotificationCenter';
 import * as merchantStore from '@/lib/merchant-store';
 
+// Mock next-intl — returns the key with interpolated values so assertions are stable
+vi.mock('next-intl', () => ({
+  useTranslations: () => (key: string, values?: Record<string, unknown>) => {
+    if (!values) return key;
+    // Simple interpolation: replace {param} with its value
+    return Object.entries(values).reduce<string>(
+      (str, [k, v]) => str.replace(`{${k}}`, String(v)),
+      key
+    );
+  },
+}));
+
 // Mock framer-motion
 vi.mock('framer-motion', () => ({
   motion: {
@@ -33,7 +45,8 @@ describe('NotificationCenter', () => {
   describe('Rendering', () => {
     it('should render notification button', () => {
       render(<NotificationCenter />);
-      const button = screen.getByRole('button', { name: /notifications/i });
+      // With i18n mock, aria-label returns the translation key "buttonLabel"
+      const button = screen.getByRole('button', { name: /buttonLabel/i });
       expect(button).toBeInTheDocument();
     });
 
@@ -46,7 +59,8 @@ describe('NotificationCenter', () => {
       render(<NotificationCenter />);
       
       await waitFor(() => {
-        const button = screen.getByRole('button', { name: /notifications \(3 unread\)/i });
+        // With i18n mock: t("buttonLabelWithCount", { count: 3 }) => "buttonLabelWithCount" (key with {count} replaced)
+        const button = screen.getByRole('button', { name: /buttonLabelWithCount/i });
         expect(button).toBeInTheDocument();
       });
     });
@@ -60,7 +74,7 @@ describe('NotificationCenter', () => {
       render(<NotificationCenter />);
       
       await waitFor(() => {
-        const button = screen.getByRole('button', { name: /notifications/i });
+        const button = screen.getByRole('button', { name: /buttonLabel/i });
         expect(button).toBeInTheDocument();
       });
     });
@@ -77,7 +91,8 @@ describe('NotificationCenter', () => {
       
       await user.click(button);
       
-      const dialog = screen.getByRole('dialog', { name: /notification center/i });
+      // aria-label comes from t("panelLabel") which the mock returns as "panelLabel"
+      const dialog = screen.getByRole('dialog', { name: /panelLabel/i });
       expect(dialog).toBeInTheDocument();
     });
 
@@ -116,8 +131,9 @@ describe('NotificationCenter', () => {
       
       await user.click(button);
       
+      // t("noAlerts") => "noAlerts" from mock
       await waitFor(() => {
-        expect(screen.getByText('No new alerts')).toBeInTheDocument();
+        expect(screen.getByText('noAlerts')).toBeInTheDocument();
       });
     });
   });
@@ -126,7 +142,8 @@ describe('NotificationCenter', () => {
     it('should have proper ARIA labels on button', () => {
       render(<NotificationCenter />);
       const button = screen.getByRole('button');
-      expect(button).toHaveAttribute('aria-label', 'Notifications');
+      // With i18n mock, aria-label is the translation key "buttonLabel"
+      expect(button).toHaveAttribute('aria-label', 'buttonLabel');
     });
 
     it('should include unread count in ARIA label', async () => {
@@ -138,7 +155,8 @@ describe('NotificationCenter', () => {
       render(<NotificationCenter />);
       
       await waitFor(() => {
-        const button = screen.getByRole('button', { name: /notifications \(5 unread\)/i });
+        // t("buttonLabelWithCount", { count: 5 }) → key with {count} interpolated
+        const button = screen.getByRole('button', { name: /buttonLabelWithCount/i });
         expect(button).toBeInTheDocument();
       });
     });
@@ -166,7 +184,7 @@ describe('NotificationCenter', () => {
     it('should have aria-haspopup attribute', () => {
       render(<NotificationCenter />);
       const button = screen.getByRole('button');
-      expect(button).toHaveAttribute('aria-haspopup', 'true');
+      expect(button).toHaveAttribute('aria-haspopup', 'dialog');
     });
 
     it('should have role="dialog" on dropdown', async () => {
@@ -198,7 +216,9 @@ describe('NotificationCenter', () => {
       
       await user.click(button);
       
-      const liveRegion = screen.getByText('3 unread');
+      // t("unreadCount", { count: 3 }) → "unreadCount" with {count} replaced → "3 unread" → key text with value
+      // Our mock returns the key text with values interpolated, so "unreadCount" key becomes the string with "{count}" replaced
+      const liveRegion = screen.getByText(/unreadCount/);
       expect(liveRegion).toHaveAttribute('aria-live', 'polite');
       expect(liveRegion).toHaveAttribute('aria-atomic', 'true');
     });
@@ -215,7 +235,8 @@ describe('NotificationCenter', () => {
       
       await user.click(button);
       
-      const list = screen.getByRole('list', { name: /notification list/i });
+      // aria-label from t("heading") => "heading"
+      const list = screen.getByRole('list', { name: /heading/i });
       expect(list).toBeInTheDocument();
     });
 
@@ -255,7 +276,8 @@ describe('NotificationCenter', () => {
       
       await user.click(button);
       
-      const dismissButton = screen.getByRole('button', { name: /dismiss notification: test notification/i });
+      // t("dismissLabel", { message: "Test notification" }) → "dismissLabel" with {message} replaced
+      const dismissButton = screen.getByRole('button', { name: /dismissLabel/i });
       expect(dismissButton).toBeInTheDocument();
     });
 

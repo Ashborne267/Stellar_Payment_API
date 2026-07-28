@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { useTranslations } from "next-intl";
 import { usePermissionsStore, type Permission } from "@/hooks/usePermissionsStore";
@@ -20,18 +19,6 @@ const CATEGORY_ORDER: Permission["category"][] = [
   "admin",
 ];
 
-const rowVariants = {
-  hidden: { opacity: 0, y: -6 },
-  visible: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 380, damping: 28 } },
-  exit: { opacity: 0, y: 6, transition: { duration: 0.15 } },
-};
-
-const categoryVariants = {
-  hidden: { opacity: 0, height: 0, overflow: "hidden" },
-  visible: { opacity: 1, height: "auto", overflow: "visible", transition: { type: "spring", stiffness: 300, damping: 30 } },
-  exit: { opacity: 0, height: 0, overflow: "hidden", transition: { duration: 0.2 } },
-};
-
 // ---------- sub-components ----------
 
 interface PermissionRowProps {
@@ -44,13 +31,12 @@ interface PermissionRowProps {
 function PermissionRow({ permission, isPending, isReadOnly, onToggle }: PermissionRowProps) {
   const disabled = isReadOnly || isPending;
   return (
-    <motion.div
+    <div
       key={permission.id}
-      variants={rowVariants}
-      initial="hidden"
-      animate="visible"
-      exit="exit"
-      className="flex items-center justify-between py-3 border-b border-[#F5F5F5] last:border-0"
+      className={[
+        "flex items-center justify-between border-b border-[#F5F5F5] py-3 last:border-0",
+        "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1",
+      ].join(" ")}
     >
       <div className="flex flex-col gap-0.5 flex-1 mr-4">
         <span className="text-sm font-semibold text-[#0A0A0A]">{permission.name}</span>
@@ -74,14 +60,16 @@ function PermissionRow({ permission, isPending, isReadOnly, onToggle }: Permissi
             disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
           ].join(" ")}
         >
-          <motion.div
-            className="absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm"
-            animate={{ left: permission.granted ? "22px" : "4px" }}
-            transition={{ type: "spring", stiffness: 500, damping: 30 }}
+          <div
+            className={[
+              "absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm",
+              "transition-[left] duration-200 ease-out motion-reduce:transition-none",
+              permission.granted ? "left-[22px]" : "left-1",
+            ].join(" ")}
           />
         </div>
       </label>
-    </motion.div>
+    </div>
   );
 }
 
@@ -118,44 +106,38 @@ function CategorySection({
         <span className="text-xs font-bold uppercase tracking-widest text-[#0A0A0A]">
           {label}
         </span>
-        <motion.svg
-          className="h-4 w-4 text-[#6B6B6B]"
+        <svg
+          className={[
+            "h-4 w-4 text-[#6B6B6B] transition-transform duration-200 motion-reduce:transition-none",
+            isExpanded ? "rotate-180" : "",
+          ].join(" ")}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
-          animate={{ rotate: isExpanded ? 180 : 0 }}
-          transition={{ duration: 0.2 }}
+          aria-hidden="true"
         >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </motion.svg>
+        </svg>
       </button>
 
-      <AnimatePresence initial={false}>
-        {isExpanded && (
-          <motion.section
-            id={`category-${category}`}
-            role="region"
-            aria-label={label}
-            variants={categoryVariants}
-            initial="hidden"
-            animate="visible"
-            exit="exit"
-            className="px-5"
-          >
-            <AnimatePresence initial={false}>
-              {items.map((p) => (
-                <PermissionRow
-                  key={p.id}
-                  permission={p}
-                  isPending={pendingIds.has(p.id)}
-                  isReadOnly={isReadOnly}
-                  onToggle={onTogglePermission}
-                />
-              ))}
-            </AnimatePresence>
-          </motion.section>
-        )}
-      </AnimatePresence>
+      {isExpanded && (
+        <section
+          id={`category-${category}`}
+          role="region"
+          aria-label={label}
+          className="px-5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1"
+        >
+          {items.map((p) => (
+            <PermissionRow
+              key={p.id}
+              permission={p}
+              isPending={pendingIds.has(p.id)}
+              isReadOnly={isReadOnly}
+              onToggle={onTogglePermission}
+            />
+          ))}
+        </section>
+      )}
     </div>
   );
 }
@@ -163,7 +145,6 @@ function CategorySection({
 // ---------- main component ----------
 
 export function UserPermissionsManager({
-  userId: _userId,
   showCategories = false,
   isReadOnly = false,
   onPermissionsChange,
@@ -248,17 +229,15 @@ export function UserPermissionsManager({
             );
           })
         ) : (
-          <AnimatePresence initial={false}>
-            {permissions.map((p: Permission) => (
-              <PermissionRow
-                key={p.id}
-                permission={p}
-                isPending={pendingIds.has(p.id)}
-                isReadOnly={isReadOnly}
-                onToggle={handleToggle}
-              />
-            ))}
-          </AnimatePresence>
+          permissions.map((p: Permission) => (
+            <PermissionRow
+              key={p.id}
+              permission={p}
+              isPending={pendingIds.has(p.id)}
+              isReadOnly={isReadOnly}
+              onToggle={handleToggle}
+            />
+          ))
         )}
       </div>
     </section>

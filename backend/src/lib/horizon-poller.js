@@ -52,9 +52,71 @@ import {
   ledgerMonitorCycleDuration,
   ledgerMonitorPaymentsChecked,
   ledgerMonitorCircuitBreakerTrips,
+  ledgerMonitorBatchSize,
+  ledgerMonitorRateLimiterWaitSeconds,
   rateLimitRequestsTotal,
   rateLimitExceededTotal,
 } from "./metrics.js";
+
+// ── Merchant Config Cache ──────────────────────────────────────────────────────
+
+/**
+ * Robust in-memory LRU cache for merchant notification configs.
+ * Reduces duplicate DB lookups across poll cycles and within a single cycle.
+ */
+class MerchantConfigCache {
+  constructor(maxEntries = 1000, ttlMs = 5 * 60 * 1000) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlMs;
+    this.cache = new Map();
+  }
+
+  get(merchantId) {
+    const entry = this.cache.get(merchantId);
+    if (!entry) return null;
+    if (Date.now() - entry.insertedAt > this.ttlMs) {
+      this.cache.delete(merchantId);
+      return null;
+    }
+    // LRU touch
+    this.cache.delete(merchantId);
+    this.cache.set(merchantId, entry);
+    return entry.data;
+  }
+
+  set(merchantId, data) {
+    if (this.cache.has(merchantId)) {
+      this.cache.delete(merchantId);
+    }
+    if (this.cache.size >= this.maxEntries) {
+      const oldest = this.cache.keys().next().value;
+      this.cache.delete(oldest);
+    }
+    this.cache.set(merchantId, { data, insertedAt: Date.now() });
+  }
+
+  invalidate(merchantId) {
+    if (merchantId) {
+      this.cache.delete(merchantId);
+      return;
+    }
+    this.cache.clear();
+  }
+
+  getStats() {
+    return {
+      size: this.cache.size,
+      maxEntries: this.maxEntries,
+      ttlMs: this.ttlMs,
+    };
+  }
+}
+
+const merchantConfigCache = new MerchantConfigCache();
+
+export function getMerchantConfigCacheStats() {
+  return merchantConfigCache.getStats();
+}
 
 /** Prometheus label set identifying the Ledger Monitor's Horizon rate limiter. */
 const RATE_LIMIT_LABELS = { endpoint: "ledger_monitor", type: "horizon" };
@@ -205,6 +267,7 @@ export function createLedgerMonitorRateLimiter({
         "Horizon poller: rate limit reached — delaying Horizon request",
       );
       await sleepFn(delayMs);
+      ledgerMonitorRateLimiterWaitSeconds.observe(delayMs / 1000);
       refill();
       tokens = Math.max(0, tokens - 1);
     },
@@ -287,6 +350,8 @@ async function pollPendingPayments() {
       _consecutiveFailures = 0;
       _backoffIndex = 0;
     }
+
+    ledgerMonitorBatchSize.set(pending?.length ?? 0);
 
     if (!pending || pending.length === 0) return;
 
@@ -442,20 +507,22 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
           );
           ledgerMonitorPaymentsChecked.inc({ result: "failed" });
 
-          streamManager.notify(payment.id, "payment.failed", {
-            status: "failed",
-            reason: "underpayment",
-            expected_amount: expected,
-            received_amount: received,
-          });
-          if (_io && payment.merchant_id) {
-            _io.to(`merchant:${payment.merchant_id}`).emit("payment:failed", {
+          notifyPaymentEvent(payment, {
+            sseEvent: "payment.failed",
+            sseData: {
+              status: "failed",
+              reason: "underpayment",
+              expected_amount: expected,
+              received_amount: received,
+            },
+            socketEvent: "payment:failed",
+            socketData: {
               id: payment.id,
               reason: "underpayment",
               expected_amount: expected,
               received_amount: received,
-            });
-          }
+            },
+          });
         } else if (diff > 0.0000001) {
           // Overpayment — confirm but flag
           const latencySeconds = (Date.now() - new Date(payment.created_at).getTime()) / 1000;
@@ -483,18 +550,20 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
             "Horizon poller: overpayment — confirmed with flag",
           );
           ledgerMonitorPaymentsChecked.inc({ result: "confirmed" });
-          streamManager.notify(payment.id, "payment.confirmed", {
-            status: "confirmed",
-            tx_id: anyPayment.transaction_hash,
-            overpayment: true,
-          });
-          if (_io && payment.merchant_id) {
-            _io.to(`merchant:${payment.merchant_id}`).emit("payment:confirmed", {
+          notifyPaymentEvent(payment, {
+            sseEvent: "payment.confirmed",
+            sseData: {
+              status: "confirmed",
+              tx_id: anyPayment.transaction_hash,
+              overpayment: true,
+            },
+            socketEvent: "payment:confirmed",
+            socketData: {
               id: payment.id,
               tx_id: anyPayment.transaction_hash,
               overpayment: true,
-            });
-          }
+            },
+          });
         }
       }
       return;
@@ -585,15 +654,15 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
     );
     ledgerMonitorPaymentsChecked.inc({ result: "confirmed" });
 
-    // SSE → customer checkout page
-    streamManager.notify(payment.id, "payment.confirmed", {
-      status: "confirmed",
-      tx_id: match.transaction_hash,
-    });
-
-    // Socket.io → merchant dashboard
-    if (_io && payment.merchant_id) {
-      _io.to(`merchant:${payment.merchant_id}`).emit("payment:confirmed", {
+    // SSE (customer checkout page) + Socket.io (merchant dashboard)
+    notifyPaymentEvent(payment, {
+      sseEvent: "payment.confirmed",
+      sseData: {
+        status: "confirmed",
+        tx_id: match.transaction_hash,
+      },
+      socketEvent: "payment:confirmed",
+      socketData: {
         id: payment.id,
         amount: payment.amount,
         asset: payment.asset,
@@ -601,8 +670,8 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
         recipient: payment.recipient,
         tx_id: match.transaction_hash,
         confirmed_at: new Date().toISOString(),
-      });
-    }
+      },
+    });
 
     // Webhook
     const merchant = await loadMerchantNotificationConfig(payment.merchant_id, merchantConfigCache);
@@ -660,6 +729,18 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Notify both the customer (SSE) and merchant dashboard (Socket.io) of a
+ * payment status change. Consolidates the confirm/fail/overpayment emit
+ * pattern that was previously duplicated at each call site.
+ */
+function notifyPaymentEvent(payment, { sseEvent, sseData, socketEvent, socketData }) {
+  streamManager.notify(payment.id, sseEvent, sseData);
+  if (_io && payment.merchant_id) {
+    _io.to(`merchant:${payment.merchant_id}`).emit(socketEvent, socketData);
+  }
 }
 
 function parsePositiveInt(value, fallback) {
@@ -799,31 +880,52 @@ async function preloadMerchantConfigs(payments) {
     ];
     if (merchantIds.length === 0) return cache;
 
-    const { data, error } = await supabase
-      .from("merchants")
-      .select(`id, ${MERCHANT_NOTIFICATION_FIELDS}`)
-      .in("id", merchantIds);
-
-    if (error) {
-      logger.warn(
-        { err: error, merchantCount: merchantIds.length },
-        "Horizon poller: batch merchant preload failed — falling back to per-payment lookups",
-      );
-      return cache;
-    }
-
-    for (const merchant of data ?? []) {
-      cache.set(merchant.id, merchant);
-    }
-    // Record cache misses as null so confirmation never re-queries them.
+    const cached = [];
+    const toFetch = [];
     for (const id of merchantIds) {
-      if (!cache.has(id)) cache.set(id, null);
+      const entry = merchantConfigCache.get(id);
+      if (entry) {
+        cached.push({ id, entry });
+      } else {
+        toFetch.push(id);
+      }
+    }
+
+    for (const { id, entry } of cached) {
+      cache.set(id, entry);
+    }
+
+    if (toFetch.length > 0) {
+      const { data, error } = await supabase
+        .from("merchants")
+        .select(`id, ${MERCHANT_NOTIFICATION_FIELDS}`)
+        .in("id", toFetch);
+
+      if (error) {
+        logger.warn(
+          { err: error, merchantCount: toFetch.length },
+          "Horizon poller: batch merchant preload failed — falling back to per-payment lookups",
+        );
+        return cache;
+      }
+
+      for (const merchant of data ?? []) {
+        merchantConfigCache.set(merchant.id, merchant);
+        cache.set(merchant.id, merchant);
+      }
+      for (const id of toFetch) {
+        if (!cache.has(id)) {
+          merchantConfigCache.set(id, null);
+          cache.set(id, null);
+        }
+      }
     }
   } catch (err) {
     logger.warn(
       { err },
       "Horizon poller: batch merchant preload errored — falling back to per-payment lookups",
     );
+    merchantConfigCache.invalidate(null);
     return new Map();
   }
   return cache;
@@ -838,6 +940,12 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
     return cache.get(merchantId);
   }
 
+  const merchant = merchantConfigCache.get(merchantId);
+  if (merchant !== null && merchant !== undefined) {
+    cache.set(merchantId, merchant);
+    return merchant;
+  }
+
   const { data, error } = await supabase
     .from("merchants")
     .select(MERCHANT_NOTIFICATION_FIELDS)
@@ -850,10 +958,12 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
       "Horizon poller: failed to load merchant notification config",
     );
     cache.set(merchantId, null);
+    merchantConfigCache.set(merchantId, null);
     return null;
   }
 
-  const merchant = data ?? null;
-  cache.set(merchantId, merchant);
-  return merchant;
+  const result = data ?? null;
+  cache.set(merchantId, result);
+  merchantConfigCache.set(merchantId, result);
+  return result;
 }

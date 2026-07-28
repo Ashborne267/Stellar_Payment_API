@@ -42,6 +42,7 @@ import {
   handleVerifySignature,
 } from "./lib/transaction-signer.js";
 import { versionDeprecationMiddleware } from "./lib/version-deprecation.js";
+import oracleRouter from "./routes/oracle.js";
 
 export async function createApp({ redisClient }) {
   const app = express();
@@ -336,6 +337,9 @@ export async function createApp({ redisClient }) {
 
   // x402 pay-per-request verification (public — agents call this)
   app.use("/api", x402Router);
+
+  // Smart Contract Oracle Integrator endpoints
+  app.use("/", oracleRouter);
 
   // Sentry error handler — must come after all routes, before custom error handler
   setupSentryErrorHandler(app);

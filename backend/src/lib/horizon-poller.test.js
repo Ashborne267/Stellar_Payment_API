@@ -25,6 +25,8 @@ const {
   mockLedgerMonitorCycleDuration,
   mockLedgerMonitorPaymentsChecked,
   mockLedgerMonitorCircuitBreakerTrips,
+  mockLedgerMonitorBatchSize,
+  mockLedgerMonitorRateLimiterWaitSeconds,
   mockRateLimitRequestsTotal,
   mockRateLimitExceededTotal,
   mockLogger,
@@ -46,6 +48,8 @@ const {
   mockLedgerMonitorCycleDuration: { observe: vi.fn() },
   mockLedgerMonitorPaymentsChecked: { inc: vi.fn() },
   mockLedgerMonitorCircuitBreakerTrips: { inc: vi.fn() },
+  mockLedgerMonitorBatchSize: { set: vi.fn() },
+  mockLedgerMonitorRateLimiterWaitSeconds: { observe: vi.fn() },
   mockRateLimitRequestsTotal: { inc: vi.fn() },
   mockRateLimitExceededTotal: { inc: vi.fn() },
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -95,6 +99,8 @@ vi.mock("./metrics.js", () => ({
   ledgerMonitorCycleDuration: mockLedgerMonitorCycleDuration,
   ledgerMonitorPaymentsChecked: mockLedgerMonitorPaymentsChecked,
   ledgerMonitorCircuitBreakerTrips: mockLedgerMonitorCircuitBreakerTrips,
+  ledgerMonitorBatchSize: mockLedgerMonitorBatchSize,
+  ledgerMonitorRateLimiterWaitSeconds: mockLedgerMonitorRateLimiterWaitSeconds,
   rateLimitRequestsTotal: mockRateLimitRequestsTotal,
   rateLimitExceededTotal: mockRateLimitExceededTotal,
 }));
@@ -112,6 +118,7 @@ import {
   resetPollerState,
   pollOnce,
   createLedgerMonitorRateLimiter,
+  setLedgerMonitorRateLimiterForTest,
 } from "./horizon-poller.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -879,7 +886,17 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
       // Promise.allSettled accounting loop must handle it (this is the path the
       // old `results` ReferenceError silently broke).
       mockFindMatchingPayment.mockRejectedValue(new Error("horizon down"));
-      mockLedgerMonitorPaymentsChecked.inc.mockImplementation(() => {
+      // The horizon-error branch calls inc({result:"skipped"}) once; when that
+      // throws, checkPayment's own outer catch runs and calls inc() a second
+      // time (also throwing) — that second throw escapes checkPayment entirely,
+      // rejecting the group promise. Two `mockImplementationOnce` calls (one per
+      // inc() invocation in this path) instead of a persistent `mockImplementation`,
+      // which would otherwise leak into every later test in this file —
+      // vi.clearAllMocks() in afterEach clears call history but not implementations.
+      mockLedgerMonitorPaymentsChecked.inc.mockImplementationOnce(() => {
+        throw new Error("metrics backend unavailable");
+      });
+      mockLedgerMonitorPaymentsChecked.inc.mockImplementationOnce(() => {
         throw new Error("metrics backend unavailable");
       });
 
@@ -966,6 +983,211 @@ describe("Ledger Monitor — error recovery (Issue #627)", () => {
       );
       // ...and no per-payment merchant fallback lookups.
       expect(merchantEqMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Granular metrics (Issue #1128) ──────────────────────────────────────────
+
+  describe("granular metrics", () => {
+    it("records the fetched batch size as a gauge each cycle", async () => {
+      const payments = [
+        makePayment({ id: "pay-1", recipient: VALID_RECIPIENT_A }),
+        makePayment({ id: "pay-2", recipient: VALID_RECIPIENT_B }),
+      ];
+
+      mockSupabaseFrom.mockImplementation((table) => {
+        if (table === "merchants") {
+          return { select: vi.fn().mockReturnThis(), in: vi.fn().mockResolvedValue({ data: [], error: null }) };
+        }
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          neq: vi.fn().mockReturnThis(),
+          is: vi.fn().mockReturnThis(),
+          gte: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockResolvedValue({ data: payments, error: null }),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: "updated" }, error: null }),
+          }),
+        };
+      });
+      mockFindMatchingPayment.mockResolvedValue(null);
+      mockFindAnyRecentPayment.mockResolvedValue(null);
+
+      await pollOnce();
+
+      expect(mockLedgerMonitorBatchSize.set).toHaveBeenCalledWith(2);
+    });
+
+    it("records rate-limiter wait time when Horizon calls are throttled", async () => {
+      const limiter = createLedgerMonitorRateLimiter({ maxPerSecond: 1, burst: 1 });
+      await limiter.waitForSlot(); // consumes the only token
+      await limiter.waitForSlot(); // must throttle and wait
+
+      expect(mockLedgerMonitorRateLimiterWaitSeconds.observe).toHaveBeenCalledWith(
+        expect.any(Number),
+      );
+    });
+  });
+
+  // ── End-to-end mixed-batch poll cycle (Issue #1126) ─────────────────────────
+
+  describe("end-to-end: mixed-outcome batch in a single poll cycle", () => {
+    it("confirms one payment and fails another in the same cycle, isolated per group", async () => {
+      const confirmedPayment = makePayment({
+        id: "pay-confirmed",
+        recipient: VALID_RECIPIENT_A,
+        merchant_id: "merchant-001",
+        amount: "10.0000000",
+      });
+      const underpaidPayment = makePayment({
+        id: "pay-underpaid",
+        recipient: VALID_RECIPIENT_B,
+        merchant_id: "merchant-002",
+        amount: "10.0000000",
+      });
+      const payments = [confirmedPayment, underpaidPayment];
+
+      mockSupabaseFrom.mockImplementation((table) => {
+        if (table === "merchants") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            in: vi.fn().mockResolvedValue({
+              data: [
+                { id: "merchant-001", ...makeMerchant() },
+                { id: "merchant-002", ...makeMerchant() },
+              ],
+              error: null,
+            }),
+          };
+        }
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          neq: vi.fn().mockReturnThis(),
+          is: vi.fn().mockReturnThis(),
+          gte: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockResolvedValue({ data: payments, error: null }),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: "updated" }, error: null }),
+          }),
+        };
+      });
+
+      mockFindMatchingPayment.mockImplementation(({ recipient }) =>
+        recipient === VALID_RECIPIENT_A
+          ? Promise.resolve({
+              id: "op-1",
+              transaction_hash: VALID_TX_HASH,
+              received_amount: "10.0000000",
+            })
+          : Promise.resolve(null),
+      );
+      mockFindAnyRecentPayment.mockImplementation(({ recipient }) =>
+        recipient === VALID_RECIPIENT_B
+          ? Promise.resolve({ transaction_hash: "tx-under", received_amount: "5.0000000" })
+          : Promise.resolve(null),
+      );
+
+      await pollOnce();
+
+      // Confirmed group: SSE + merchant socket + counters all fire correctly.
+      expect(mockStreamManagerNotify).toHaveBeenCalledWith(
+        confirmedPayment.id,
+        "payment.confirmed",
+        expect.objectContaining({ status: "confirmed", tx_id: VALID_TX_HASH }),
+      );
+      // Failed group: isolated from the confirmed group, notified independently.
+      expect(mockStreamManagerNotify).toHaveBeenCalledWith(
+        underpaidPayment.id,
+        "payment.failed",
+        expect.objectContaining({ reason: "underpayment" }),
+      );
+      expect(mockLedgerMonitorPaymentsChecked.inc).toHaveBeenCalledWith({ result: "confirmed" });
+      expect(mockLedgerMonitorPaymentsChecked.inc).toHaveBeenCalledWith({ result: "failed" });
+      expect(mockLedgerMonitorBatchSize.set).toHaveBeenCalledWith(2);
+      expect(mockLedgerMonitorCycleDuration.observe).toHaveBeenCalled();
+    });
+  });
+
+  // ── Load test (Issue #1129) ─────────────────────────────────────────────────
+
+  describe("load: high-volume poll cycle", () => {
+    it("processes a large batch of independent payments within one cycle without cross-group interference", async () => {
+      const BATCH = 50; // matches production BATCH_SIZE
+      const payments = Array.from({ length: BATCH }, (_, i) =>
+        makePayment({
+          id: `pay-${i}`,
+          recipient: i % 2 === 0 ? VALID_RECIPIENT_A : VALID_RECIPIENT_B,
+          merchant_id: `merchant-${i % 2}`,
+        }),
+      );
+
+      mockSupabaseFrom.mockImplementation((table) => {
+        if (table === "merchants") {
+          return {
+            select: vi.fn().mockReturnThis(),
+            in: vi.fn().mockResolvedValue({
+              data: [
+                { id: "merchant-0", ...makeMerchant() },
+                { id: "merchant-1", ...makeMerchant() },
+              ],
+              error: null,
+            }),
+          };
+        }
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          neq: vi.fn().mockReturnThis(),
+          is: vi.fn().mockReturnThis(),
+          gte: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockResolvedValue({ data: payments, error: null }),
+          maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnThis(),
+            is: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({ data: { id: "updated" }, error: null }),
+          }),
+        };
+      });
+
+      mockFindMatchingPayment.mockResolvedValue({
+        id: "op-load",
+        transaction_hash: VALID_TX_HASH,
+        received_amount: "10.0000000",
+      });
+
+      // Load-test throughput of the group-processing pipeline itself, not the
+      // intentional Horizon rate limit (that's covered separately above).
+      setLedgerMonitorRateLimiterForTest(
+        createLedgerMonitorRateLimiter({ maxPerSecond: 10_000, burst: 10_000 }),
+      );
+
+      const startedAt = Date.now();
+      await pollOnce();
+      const elapsedMs = Date.now() - startedAt;
+
+      // All 50 payments across the two recipient groups were checked and every
+      // notification fired — nothing was dropped under load.
+      expect(mockStreamManagerNotify).toHaveBeenCalledTimes(BATCH);
+      expect(mockLedgerMonitorBatchSize.set).toHaveBeenCalledWith(BATCH);
+      // Sanity ceiling — a full mocked cycle (no real network/DB latency) should
+      // stay well under a second; a large regression here would signal an
+      // accidental serial bottleneck (e.g. losing the per-group concurrency).
+      expect(elapsedMs).toBeLessThan(5_000);
     });
   });
 });

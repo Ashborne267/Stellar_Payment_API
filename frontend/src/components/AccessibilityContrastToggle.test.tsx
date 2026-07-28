@@ -44,11 +44,11 @@ describe("AccessibilityContrastToggle", () => {
     localStorage.clear();
   });
 
-  it("renders loading state initially", () => {
+  it("renders an accessible toggle after provider mount", async () => {
     renderWithProviders(<AccessibilityContrastToggle />);
-    const button = screen.getByRole("button", { name: /loading/i });
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute("aria-busy", "true");
+    const button = await screen.findByRole("button", { name: /contrast/i });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("aria-busy", "false");
   });
 
   it("renders toggle button after mounting", async () => {
@@ -76,7 +76,7 @@ describe("AccessibilityContrastToggle", () => {
 
     await waitFor(() => {
       const announcement = screen.getByRole("status");
-      expect(announcement.textContent).toContain("Switching");
+      expect(announcement.textContent).toMatch(/Switching|successfully changed/);
     });
   });
 

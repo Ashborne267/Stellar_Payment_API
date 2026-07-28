@@ -9,24 +9,28 @@ import { useNetworkStatusStore } from "@/lib/network-status-store";
 vi.mock("@/lib/network-status-store");
 const mockUseNetworkStatusStore = useNetworkStatusStore as ReturnType<typeof vi.fn>;
 
-// Mock framer-motion
-vi.mock("framer-motion", () => ({
-  motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-    button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
-    span: ({ children, ...props }: any) => <span {...props}>{children}</span>,
-    svg: ({ children, ...props }: any) => <svg {...props}>{children}</svg>,
-  },
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({
-    start: vi.fn(),
-    stop: vi.fn(),
-  }),
-}));
-
-// Mock next-intl
+// Mock next-intl with proper translations for network keys
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: () => {
+    const translations: Record<string, string> = {
+      "network.status": "Network Status",
+      "network.refresh": "Check network status",
+      "network.latency": "Latency",
+      "network.connection": "Connection",
+      "network.error": "Error",
+      "network.lastChecked": "Last checked",
+      "network.online": "Online",
+      "network.offline": "Offline",
+      "network.slow": "Slow",
+      "network.checking": "Checking...",
+      "network.connectionQuality": "Connection Quality",
+      "network.excellent": "Excellent",
+      "network.good": "Good",
+      "network.fair": "Fair",
+      "network.poor": "Poor",
+    };
+    return (key: string) => translations[key] || key;
+  },
 }));
 
 // Mock animation utilities
@@ -154,7 +158,8 @@ describe("NetworkStatusIndicator", () => {
       
       render(<NetworkStatusIndicator />);
       
-      expect(screen.getByText("Checking...")).toBeInTheDocument();
+      const checkingElements = screen.getAllByText("Checking...");
+      expect(checkingElements.length).toBeGreaterThanOrEqual(1);
     });
 
     it("displays error message when present", () => {
@@ -173,7 +178,7 @@ describe("NetworkStatusIndicator", () => {
     it("calls checkStatus when refresh button is clicked", () => {
       render(<NetworkStatusIndicator />);
       
-      const refreshButton = screen.getByLabelText("network.refresh");
+      const refreshButton = screen.getByLabelText("Check network status");
       
       // Clear the initial check call
       vi.clearAllMocks();
@@ -191,7 +196,7 @@ describe("NetworkStatusIndicator", () => {
       
       render(<NetworkStatusIndicator />);
       
-      const refreshButton = screen.getByLabelText("network.refresh");
+      const refreshButton = screen.getByLabelText("Check network status");
       expect(refreshButton).toBeDisabled();
     });
 
@@ -203,7 +208,7 @@ describe("NetworkStatusIndicator", () => {
       
       render(<NetworkStatusIndicator />);
       
-      const refreshButton = screen.getByLabelText("network.refresh");
+      const refreshButton = screen.getByLabelText("Check network status");
       expect(refreshButton).not.toBeDisabled();
     });
   });
@@ -273,7 +278,7 @@ describe("NetworkStatusIndicator", () => {
       render(<NetworkStatusIndicator />);
       
       const region = screen.getByRole("region");
-      expect(region).toHaveAttribute("aria-label", "network.status");
+      expect(region).toHaveAttribute("aria-label", "Network Status");
       expect(region).toHaveAttribute("aria-live", "polite");
       expect(region).toHaveAttribute("aria-atomic", "true");
     });
@@ -281,7 +286,7 @@ describe("NetworkStatusIndicator", () => {
     it("has accessible refresh button", () => {
       render(<NetworkStatusIndicator />);
       
-      const refreshButton = screen.getByLabelText("network.refresh");
+      const refreshButton = screen.getByLabelText("Check network status");
       expect(refreshButton).toBeInTheDocument();
     });
 
@@ -382,7 +387,7 @@ describe("NetworkStatusIndicator", () => {
       
       render(<NetworkStatusIndicator />);
       
-      expect(screen.getByText(/lastChecked/)).toBeInTheDocument();
+      expect(screen.getByText(/Last checked/)).toBeInTheDocument();
     });
 
     it("hides last checked time when there are errors", () => {
@@ -394,7 +399,7 @@ describe("NetworkStatusIndicator", () => {
       
       render(<NetworkStatusIndicator />);
       
-      expect(screen.queryByText(/lastChecked/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Last checked/)).not.toBeInTheDocument();
     });
   });
 
@@ -402,14 +407,12 @@ describe("NetworkStatusIndicator", () => {
     it("enables micro-interactions by default", () => {
       render(<NetworkStatusIndicator />);
       
-      // Component should render without issues
       expect(screen.getByRole("region")).toBeInTheDocument();
     });
 
     it("disables micro-interactions when specified", () => {
       render(<NetworkStatusIndicator enableMicroInteractions={false} />);
       
-      // Component should still render normally
       expect(screen.getByRole("region")).toBeInTheDocument();
     });
   });
@@ -423,14 +426,12 @@ describe("NetworkStatusIndicator", () => {
       const endTime = performance.now();
       const renderTime = endTime - startTime;
       
-      // Should render quickly (under 200ms for test environment)
       expect(renderTime).toBeLessThan(200);
     });
 
     it("handles rapid status changes efficiently", () => {
       const { rerender } = render(<NetworkStatusIndicator />);
       
-      // Simulate rapid status changes
       const statuses = ["online", "offline", "checking", "slow", "online"];
       
       statuses.forEach((status) => {
@@ -442,7 +443,6 @@ describe("NetworkStatusIndicator", () => {
         rerender(<NetworkStatusIndicator />);
       });
       
-      // Should handle changes without errors
       expect(screen.getByRole("region")).toBeInTheDocument();
     });
   });

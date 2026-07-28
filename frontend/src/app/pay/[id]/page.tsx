@@ -23,10 +23,10 @@ import Skeleton, { SkeletonTheme } from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { QRCodeSVG } from "qrcode.react";
 import { localeToLanguageTag } from "@/i18n/config";
-import { PaymentSuccessAnimation } from "@/components/PaymentSuccessAnimation";
 import { useCheckoutPresence } from "@/lib/useCheckoutPresence";
 import { Modal } from "@/components/ui/Modal";
 import { NetworkFeeEstimation } from "@/components/NetworkFeeEstimation";
+import { PaymentSuccessAnimation } from "@/components/PaymentSuccessAnimation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 const NETWORK = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "testnet";
@@ -158,6 +158,9 @@ export default function PaymentPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [showQrModal, setShowQrModal] = useState(false);
   const [isOptimisticSuccess, setIsOptimisticSuccess] = useState(false);
+  // Tracks whether the success animation has ever been needed, so its lazy
+  // chunk is only fetched on first success rather than on initial page load.
+  const [hasSucceededOnce, setHasSucceededOnce] = useState(false);
   const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
@@ -181,6 +184,10 @@ export default function PaymentPage() {
       setIsOptimisticSuccess(true);
     }
   }, [payment]);
+
+  useEffect(() => {
+    if (isOptimisticSuccess) setHasSucceededOnce(true);
+  }, [isOptimisticSuccess]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -362,14 +369,16 @@ export default function PaymentPage() {
 
   return (
     <>
-      <PaymentSuccessAnimation
-        show={isOptimisticSuccess}
-        onComplete={() => setIsOptimisticSuccess(false)}
-        amount={payment?.amount != null ? String(payment.amount) : undefined}
-        asset={payment?.asset}
-        txId={payment?.tx_id ?? undefined}
-        isOptimistic={payment?.status !== "confirmed" && payment?.status !== "completed"}
-      />
+      {hasSucceededOnce && (
+        <PaymentSuccessAnimation
+          show={isOptimisticSuccess}
+          onComplete={() => setIsOptimisticSuccess(false)}
+          amount={payment?.amount != null ? String(payment.amount) : undefined}
+          asset={payment?.asset}
+          txId={payment?.tx_id ?? undefined}
+          isOptimistic={payment?.status !== "confirmed" && payment?.status !== "completed"}
+        />
+      )}
 
       <AnimatePresence>
         {isProcessing && !isOptimisticSuccess && (
@@ -504,7 +513,7 @@ export default function PaymentPage() {
                       {t("completePayment")}
                     </p>
                     <p className="text-sm text-[#6B6B6B]">
-                      {payment.description ?? t("paymentRequest")}
+                      {t("paymentRequest")}
                     </p>
                   </div>
                   {activeProvider ? (
@@ -684,5 +693,4 @@ export default function PaymentPage() {
     </>
   );
 }
-
 

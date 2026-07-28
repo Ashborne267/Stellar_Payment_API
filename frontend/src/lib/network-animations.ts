@@ -12,7 +12,7 @@ export const baseTransition: Transition = {
 };
 
 // Status dot animation variants
-export const statusDotVariants: Variants = {
+export const statusDotVariants = {
   online: {
     scale: [1, 1.2, 1],
     opacity: [0.8, 1, 0.8],
@@ -49,7 +49,7 @@ export const statusDotVariants: Variants = {
       ease: "linear",
     },
   },
-};
+} satisfies Variants;
 
 // Pulse animation for status indicators
 export const pulseVariants: Variants = {
@@ -156,7 +156,7 @@ export const refreshButtonVariants: Variants = {
 };
 
 // Latency indicator animation variants
-export const latencyVariants: Variants = {
+export const latencyVariants = {
   good: {
     color: "rgb(34, 197, 94)",
     scale: 1,
@@ -179,10 +179,10 @@ export const latencyVariants: Variants = {
       ease: "easeInOut",
     },
   },
-};
+} satisfies Variants;
 
 // Connection quality indicator animation
-export const connectionQualityVariants: Variants = {
+export const connectionQualityVariants = {
   excellent: {
     backgroundColor: "rgb(34, 197, 94)",
     width: "100%",
@@ -203,7 +203,7 @@ export const connectionQualityVariants: Variants = {
     width: "25%",
     transition: { type: "spring", stiffness: 80, damping: 15 },
   },
-};
+} satisfies Variants;
 
 // Error message animation variants
 export const errorMessageVariants: Variants = {

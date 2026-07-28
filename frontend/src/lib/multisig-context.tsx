@@ -7,11 +7,13 @@ import {
   useCallback,
   useMemo,
   useRef,
+  useState,
   ReactNode,
 } from "react";
 
 export type MultisigApprovalStatus = "pending" | "approved" | "rejected" | "expired" | "processing";
-export type MultisigStep = "review" | "sign" | "submit" | "confirm" | "processing" | "error";
+<<<<<<< HEAD
+export type MultisigStep = "review" | "sign" | "submit" | "processing" | "confirm" | "error";
 
 export interface MultisigSigner {
   id: string;
@@ -179,19 +181,23 @@ interface MultisigProviderProps {
   readonly networkPassphrase: string;
 }
 
-export function MultisigProvider({ children, networkPassphrase: _networkPassphrase }: MultisigProviderProps) {
+export function MultisigProvider({ children, networkPassphrase }: MultisigProviderProps) {
   const [state, dispatch] = useReducer(multisigReducer, INITIAL_STATE);
+  const [isPendingConfirmation, setIsPendingConfirmation] = useState(false);
   const stateRef = useRef(state);
   stateRef.current = state;
-
-  void _networkPassphrase;
 
   const clearError = useCallback(() => {
     dispatch({ type: "CLEAR_ERROR" });
   }, []);
 
+  const setCurrentStep = useCallback((step: MultisigStep) => {
+    dispatch({ type: "SET_STEP", payload: step });
+  }, []);
+
   const resetModal = useCallback(() => {
     dispatch({ type: "RESET" });
+    setIsPendingConfirmation(false);
   }, []);
 
   const setTransactionSafe = useCallback((newTransaction: MultisigTransaction | null) => {
@@ -276,8 +282,14 @@ export function MultisigProvider({ children, networkPassphrase: _networkPassphra
 
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      const txHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      dispatch({ type: "SUBMIT_SUCCESS", txHash });
+      // Finalize with real transaction hash
+      const realTxHash = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      setTransactionSafe({
+        ...transaction,
+        status: 'approved' as MultisigApprovalStatus,
+        submittedTxHash: realTxHash,
+      });
+      dispatch({ type: "SUBMIT_SUCCESS", txHash: realTxHash });
     } catch (err) {
       setTransactionSafe(previousTransaction);
       const errorMessage = err instanceof Error ? err.message : "Failed to submit transaction";
@@ -286,7 +298,7 @@ export function MultisigProvider({ children, networkPassphrase: _networkPassphra
       console.error("Submission error:", err);
     } finally {
       dispatch({ type: "SET_LOADING", payload: false });
-      dispatch({ type: "SET_PENDING_CONFIRMATION", payload: false });
+      setIsPendingConfirmation(false);
     }
   }, [clearError, setTransactionSafe]);
 

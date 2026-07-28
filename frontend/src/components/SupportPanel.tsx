@@ -155,7 +155,7 @@ export function SupportPanel() {
                     className="flex items-center gap-2"
                   >
                     <span className="sr-only">{t("loadingBalance")}</span>
-                    <Spinner size="xs" aria-hidden="true" />
+                    <Spinner size="sm" className="h-3 w-3" aria-hidden="true" />
                   </motion.div>
                 ) : isUnfunded ? (
                   <motion.a
@@ -192,7 +192,7 @@ export function SupportPanel() {
               {loadingBalance ? (
                 <div className="flex items-center gap-2">
                   <span className="sr-only">{t("loadingBalance")}</span>
-                  <Spinner size="xs" aria-hidden="true" />
+                  <Spinner size="sm" className="h-3 w-3" aria-hidden="true" />
                 </div>
               ) : isUnfunded ? (
                 <a
