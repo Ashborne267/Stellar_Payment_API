@@ -6,6 +6,9 @@ import {
   exchangeRateQuoteDuration,
   exchangeRateHorizonCalls,
   exchangeRateSourceAccountValidation,
+  horizonCacheEntries,
+  horizonCacheHitsTotal,
+  horizonCacheMissesTotal,
   signatureVerificationTotal,
   signatureVerificationDuration,
   signatureVerificationReplayAttempts,
@@ -22,6 +25,65 @@ const HORIZON_URL = (
 const server = new StellarSdk.Horizon.Server(HORIZON_URL);
 const HORIZON_HEALTH_TIMEOUT_MS = 2_000;
 const HORIZON_RETRY_DELAYS_MS = [150, 500];
+const HORIZON_CACHE_TTL_MS = Number.parseInt(
+  process.env.HORIZON_CACHE_TTL_MS || "15000",
+  10,
+);
+const HORIZON_CACHE_MAX_ENTRIES = Number.parseInt(
+  process.env.HORIZON_CACHE_MAX_ENTRIES || "250",
+  10,
+);
+const horizonResponseCache = new Map();
+
+function isHorizonCacheEnabled() {
+  return HORIZON_CACHE_TTL_MS > 0 && HORIZON_CACHE_MAX_ENTRIES > 0;
+}
+
+function pruneHorizonCache(now = Date.now()) {
+  for (const [key, entry] of horizonResponseCache.entries()) {
+    if (entry.expiresAt <= now) {
+      horizonResponseCache.delete(key);
+    }
+  }
+
+  while (horizonResponseCache.size > HORIZON_CACHE_MAX_ENTRIES) {
+    const oldestKey = horizonResponseCache.keys().next().value;
+    if (!oldestKey) break;
+    horizonResponseCache.delete(oldestKey);
+  }
+
+  horizonCacheEntries.set(horizonResponseCache.size);
+}
+
+async function cachedHorizonCall(operation, cacheKey, request, context = "") {
+  if (!isHorizonCacheEnabled()) {
+    return withHorizonRetry(request, context);
+  }
+
+  const now = Date.now();
+  const key = `${NETWORK}:${HORIZON_URL}:${operation}:${cacheKey}`;
+  const cached = horizonResponseCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    horizonCacheHitsTotal.inc({ operation });
+    return cached.value;
+  }
+
+  horizonCacheMissesTotal.inc({ operation });
+  const value = await withHorizonRetry(request, context);
+  pruneHorizonCache(now);
+  horizonResponseCache.set(key, {
+    value,
+    expiresAt: now + HORIZON_CACHE_TTL_MS,
+  });
+  horizonCacheEntries.set(horizonResponseCache.size);
+  return value;
+}
+
+export function clearHorizonCache() {
+  horizonResponseCache.clear();
+  horizonCacheEntries.set(0);
+}
+
 const STELLAR_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
 const ASSET_CODE_PATTERN = /^[A-Z0-9]{1,12}$/;
 
@@ -387,7 +449,12 @@ function memoMatches(tx, expectedMemo, expectedMemoType) {
  */
 async function isMultiSigAccount(accountId) {
   try {
-    const account = await server.loadAccount(accountId);
+    const account = await cachedHorizonCall(
+      "load_account",
+      accountId,
+      () => server.loadAccount(accountId),
+      accountId,
+    );
     const thresholds = account.thresholds;
     const signers = account.signers;
 
@@ -432,7 +499,9 @@ export async function findStrictReceivePaths({
   try {
     if (sourceAccount) {
       try {
-        await withHorizonRetry(
+        await cachedHorizonCall(
+          "load_account",
+          sourceAccount,
           () => server.loadAccount(sourceAccount),
           `source account ${sourceAccount}`,
         );
@@ -445,7 +514,16 @@ export async function findStrictReceivePaths({
       exchangeRateSourceAccountValidation.inc({ result: "skipped" });
     }
 
-    const result = await withHorizonRetry(
+    const result = await cachedHorizonCall(
+      "strict_receive_paths",
+      JSON.stringify({
+        sourceAccount: sourceAccount || null,
+        sourceAssetCode,
+        sourceAssetIssuer: sourceAssetIssuer || null,
+        destAssetCode,
+        destAssetIssuer: destAssetIssuer || null,
+        destAmount,
+      }),
       () =>
         server
           .strictReceivePaths([sourceAsset], destAsset, destAmount)
@@ -520,7 +598,9 @@ export async function findMatchingPayment({
 
   let page;
   try {
-    page = await withHorizonRetry(
+    page = await cachedHorizonCall(
+      "payments_for_account",
+      `${recipient}:limit:200`,
       () =>
         server
           .payments()
@@ -568,7 +648,9 @@ export async function findMatchingPayment({
     // If a memo is expected, fetch the parent transaction and compare
     if (memo != null && memo !== "") {
       try {
-        const tx = await withHorizonRetry(
+        const tx = await cachedHorizonCall(
+          "transaction",
+          payment.transaction_hash,
           () =>
             server
               .transactions()
@@ -617,7 +699,9 @@ export async function findAnyRecentPayment({
 
   let page;
   try {
-    page = await withHorizonRetry(
+    page = await cachedHorizonCall(
+      "payments_for_account",
+      `${recipient}:limit:100`,
       () => server.payments().forAccount(recipient).order("desc").limit(100).call(),
       recipient,
     );
@@ -655,7 +739,12 @@ export async function createRefundTransaction({
   memo,
 }) {
   try {
-    const account = await server.loadAccount(sourceAccount);
+    const account = await cachedHorizonCall(
+      "load_account",
+      sourceAccount,
+      () => server.loadAccount(sourceAccount),
+      sourceAccount,
+    );
     const asset = resolveAsset(assetCode, assetIssuer);
 
     const txBuilder = new StellarSdk.TransactionBuilder(account, {
@@ -697,7 +786,12 @@ export async function getNetworkFeeStats(operationCount = 1) {
       Number.isInteger(operationCount) && operationCount > 0
         ? operationCount
         : 1;
-    const feeStats = await server.feeStats();
+    const feeStats = await cachedHorizonCall(
+      "fee_stats",
+      "latest",
+      () => server.feeStats(),
+      "fee stats",
+    );
     const lastLedgerBaseFee = parseStroops(feeStats.last_ledger_base_fee);
     const chargedMode = parseStroops(feeStats.fee_charged?.mode);
     const chargedP50 = parseStroops(feeStats.fee_charged?.p50);
@@ -801,7 +895,9 @@ export async function verifyTransactionSignature(txHash, options = {}) {
   
   while (retryCount <= maxRetries) {
     try {
-      tx = await withHorizonRetry(
+      tx = await cachedHorizonCall(
+        "transaction",
+        txHash,
         () => server.transactions().transaction(txHash).call(),
         `transaction ${txHash}`,
       );
@@ -901,7 +997,9 @@ export async function verifyTransactionSignature(txHash, options = {}) {
   const sourceAccountId = transaction.source;
   let accountData;
   try {
-    accountData = await withHorizonRetry(
+    accountData = await cachedHorizonCall(
+      "load_account",
+      sourceAccountId,
       () => server.loadAccount(sourceAccountId),
       `source account ${sourceAccountId}`,
     );

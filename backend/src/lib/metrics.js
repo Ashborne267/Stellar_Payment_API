@@ -273,6 +273,56 @@ export const exchangeRateSlippageApplied = new client.Counter({
 });
 
 /**
+ * Horizon Client Cache Metrics
+ */
+
+export const horizonCacheHitsTotal = new client.Counter({
+  name: "horizon_cache_hits_total",
+  help: "Total number of Horizon client cache hits",
+  labelNames: ["operation"],
+});
+
+export const horizonCacheMissesTotal = new client.Counter({
+  name: "horizon_cache_misses_total",
+  help: "Total number of Horizon client cache misses",
+  labelNames: ["operation"],
+});
+
+export const horizonCacheEntries = new client.Gauge({
+  name: "horizon_cache_entries",
+  help: "Current number of entries in the Horizon client response cache",
+});
+
+/**
+ * Webhook Dispatcher Metrics
+ */
+
+export const webhookDispatchAttemptsTotal = new client.Counter({
+  name: "webhook_dispatch_attempts_total",
+  help: "Total number of webhook dispatch attempts",
+  labelNames: ["event_type", "result", "status_code"],
+});
+
+export const webhookDispatchDuration = new client.Histogram({
+  name: "webhook_dispatch_duration_seconds",
+  help: "Time spent dispatching webhook requests",
+  labelNames: ["event_type", "result"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30],
+});
+
+export const webhookDispatchRetriesTotal = new client.Counter({
+  name: "webhook_dispatch_retries_total",
+  help: "Total number of webhook retries scheduled by the dispatcher",
+  labelNames: ["event_type", "reason"],
+});
+
+export const webhookDispatchBlockedTotal = new client.Counter({
+  name: "webhook_dispatch_blocked_total",
+  help: "Total number of webhook dispatches blocked before delivery",
+  labelNames: ["event_type", "reason"],
+});
+
+/**
  * Smart Contract Oracle Integrator Metrics (Issue #TBD)
  */
 
@@ -358,6 +408,13 @@ register.registerMetric(exchangeRateQuoteDuration);
 register.registerMetric(exchangeRateHorizonCalls);
 register.registerMetric(exchangeRateSourceAccountValidation);
 register.registerMetric(exchangeRateSlippageApplied);
+register.registerMetric(horizonCacheHitsTotal);
+register.registerMetric(horizonCacheMissesTotal);
+register.registerMetric(horizonCacheEntries);
+register.registerMetric(webhookDispatchAttemptsTotal);
+register.registerMetric(webhookDispatchDuration);
+register.registerMetric(webhookDispatchRetriesTotal);
+register.registerMetric(webhookDispatchBlockedTotal);
 register.registerMetric(oracleCacheHitTotal);
 register.registerMetric(oracleCacheMissTotal);
 register.registerMetric(oracleCacheSize);
