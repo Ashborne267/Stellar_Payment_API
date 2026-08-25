@@ -409,6 +409,281 @@ export const dashboardMetricsCacheMissTotal = new client.Counter({
   labelNames: ["endpoint"],
 });
 
+/**
+ * Webhook Event Dispatcher Cache Metrics (Issue #1100)
+ */
+
+export const webhookEventCacheHitTotal = new client.Counter({
+  name: "webhook_event_cache_hit_total",
+  help: "Total number of webhook event cache hits",
+  labelNames: ["event_type"],
+});
+
+export const webhookEventCacheMissTotal = new client.Counter({
+  name: "webhook_event_cache_miss_total",
+  help: "Total number of webhook event cache misses",
+  labelNames: ["event_type"],
+});
+
+export const webhookEventCacheSize = new client.Gauge({
+  name: "webhook_event_cache_size",
+  help: "Current number of entries in the webhook event payload cache",
+});
+
+export const webhookEventDeduplicationCacheSize = new client.Gauge({
+  name: "webhook_event_deduplication_cache_size",
+  help: "Current number of entries in the webhook event deduplication cache",
+});
+
+export const webhookEventDeliveryAttemptsCached = new client.Counter({
+  name: "webhook_event_delivery_attempts_cached_total",
+  help: "Total number of cached webhook delivery attempts",
+  labelNames: ["action"], // deduplicated, success
+});
+
+/**
+ * Fraud Detection Engine Metrics (Issue #1098)
+ */
+
+export const fraudDetectionPaymentsAnalyzed = new client.Counter({
+  name: "fraud_detection_payments_analyzed_total",
+  help: "Total number of payments analyzed by fraud detection engine",
+});
+
+export const fraudDetectionRiskScore = new client.Histogram({
+  name: "fraud_detection_risk_score",
+  help: "Distribution of fraud detection risk scores",
+  buckets: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+});
+
+export const fraudDetectionAnomaliesDetected = new client.Counter({
+  name: "fraud_detection_anomalies_detected_total",
+  help: "Total number of anomalies detected in payment patterns",
+  labelNames: ["count"],
+});
+
+export const fraudDetectionBlockedPayments = new client.Counter({
+  name: "fraud_detection_blocked_payments_total",
+  help: "Total number of payments blocked by fraud detection",
+  labelNames: ["reason"],
+});
+
+export const fraudDetectionHighRiskDetected = new client.Counter({
+  name: "fraud_detection_high_risk_detected_total",
+  help: "Total number of high-risk payments detected",
+  labelNames: ["level"],
+});
+
+export const fraudDetectionVelocityExceeded = new client.Counter({
+  name: "fraud_detection_velocity_exceeded_total",
+  help: "Total number of velocity-based anomalies detected",
+  labelNames: ["pattern"],
+});
+
+export const fraudDetectionGeographicAnomaly = new client.Counter({
+  name: "fraud_detection_geographic_anomaly_total",
+  help: "Total number of geographic pattern anomalies detected",
+  labelNames: ["pattern"],
+});
+
+export const fraudDetectionMetadataAnomalies = new client.Counter({
+  name: "fraud_detection_metadata_anomalies_total",
+  help: "Total number of metadata-based anomalies detected",
+  labelNames: ["type"],
+});
+
+export const fraudDetectionCacheSize = new client.Gauge({
+  name: "fraud_detection_cache_size",
+  help: "Current number of entries in the fraud detection risk score cache",
+});
+
+/**
+ * Horizon Client Metrics (Issue #1106, #1108)
+ */
+
+export const horizonClientOperations = new client.Counter({
+  name: "horizon_client_operations_total",
+  help: "Total number of Horizon client operations",
+  labelNames: ["operation", "result"], // operation: loadAccount, fetchPayments, etc.; result: success, error
+});
+
+export const horizonClientErrors = new client.Counter({
+  name: "horizon_client_errors_total",
+  help: "Total number of Horizon client errors",
+  labelNames: ["operation", "error_type"], // error_type: rate_limit, not_found, server_error, network_error, etc.
+});
+
+export const horizonClientRetries = new client.Counter({
+  name: "horizon_client_retries_total",
+  help: "Total number of Horizon client retry attempts",
+  labelNames: ["operation"],
+});
+
+export const horizonClientLatency = new client.Histogram({
+  name: "horizon_client_latency_seconds",
+  help: "Horizon client operation latency in seconds",
+  labelNames: ["operation", "result"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+// Enhanced granular metrics for Horizon Client
+export const horizonClientRequestSize = new client.Histogram({
+  name: "horizon_client_request_size_bytes",
+  help: "Horizon client request size in bytes",
+  labelNames: ["operation"],
+  buckets: [100, 1000, 10000, 100000, 1000000],
+});
+
+export const horizonClientResponseSize = new client.Histogram({
+  name: "horizon_client_response_size_bytes",
+  help: "Horizon client response size in bytes",
+  labelNames: ["operation"],
+  buckets: [100, 1000, 10000, 100000, 1000000],
+});
+
+export const horizonClientCacheHits = new client.Counter({
+  name: "horizon_client_cache_hits_total",
+  help: "Total number of Horizon client cache hits",
+  labelNames: ["operation"],
+});
+
+export const horizonClientCacheMisses = new client.Counter({
+  name: "horizon_client_cache_misses_total",
+  help: "Total number of Horizon client cache misses",
+  labelNames: ["operation"],
+});
+
+export const horizonClientConnections = new client.Gauge({
+  name: "horizon_client_active_connections",
+  help: "Number of active Horizon client connections",
+});
+
+export const horizonClientQueueDepth = new client.Gauge({
+  name: "horizon_client_request_queue_depth",
+  help: "Number of pending requests in Horizon client queue",
+});
+
+export const horizonClientBackpressure = new client.Counter({
+  name: "horizon_client_backpressure_rejections_total",
+  help: "Total number of requests rejected due to backpressure",
+  labelNames: ["operation"],
+});
+
+export const horizonClientTimeouts = new client.Counter({
+  name: "horizon_client_timeouts_total",
+  help: "Total number of Horizon client timeout errors",
+  labelNames: ["operation", "timeout_type"],
+});
+
+export const horizonClientCircuitBreakerTrips = new client.Counter({
+  name: "horizon_client_circuit_breaker_trips_total",
+  help: "Total number of Horizon client circuit breaker trips",
+  labelNames: ["operation"],
+});
+
+export const horizonClientCircuitBreakerState = new client.Gauge({
+  name: "horizon_client_circuit_breaker_state",
+  help: "Current state of Horizon client circuit breaker (0=closed, 1=open, 2=half-open)",
+  labelNames: ["operation"],
+});
+
+export const horizonClientHealthCheckDuration = new client.Histogram({
+  name: "horizon_client_health_check_duration_seconds",
+  help: "Duration of Horizon client health checks in seconds",
+  buckets: [0.1, 0.5, 1, 2, 5, 10],
+});
+
+export const horizonClientHealthCheckResult = new client.Counter({
+  name: "horizon_client_health_check_results_total",
+  help: "Total number of Horizon client health check results",
+  labelNames: ["result"], // success, failure, timeout
+});
+
+export const horizonClientConcurrentOperations = new client.Gauge({
+  name: "horizon_client_concurrent_operations",
+  help: "Number of concurrent Horizon client operations",
+});
+
+export const horizonClientOperationDuration = new client.Histogram({
+  name: "horizon_client_operation_duration_seconds",
+  help: "Duration of Horizon client operations by type",
+  labelNames: ["operation", "phase"], // phase: execution, retry, total
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60],
+});
+
+export const horizonClientRetryAttemptDuration = new client.Histogram({
+  name: "horizon_client_retry_attempt_duration_seconds",
+  help: "Duration of individual retry attempts",
+  labelNames: ["operation", "attempt"],
+  buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+});
+
+export const horizonClientErrorRecovery = new client.Counter({
+  name: "horizon_client_error_recovery_total",
+  help: "Total number of successful error recoveries",
+  labelNames: ["operation", "error_type", "recovery_attempt"],
+});
+
+export const horizonClientDataValidationErrors = new client.Counter({
+  name: "horizon_client_data_validation_errors_total",
+  help: "Total number of data validation errors in Horizon client",
+  labelNames: ["operation", "validation_type"],
+});
+
+export const horizonClientSerializationErrors = new client.Counter({
+  name: "horizon_client_serialization_errors_total",
+  help: "Total number of serialization errors in Horizon client",
+  labelNames: ["operation", "data_type"],
+});
+
+export const horizonClientRateLimitWaitTime = new client.Histogram({
+  name: "horizon_client_rate_limit_wait_time_seconds",
+  help: "Time spent waiting for rate limit recovery",
+  buckets: [1, 5, 10, 30, 60, 120, 300],
+});
+
+export const horizonClientThroughput = new client.Gauge({
+  name: "horizon_client_throughput_operations_per_second",
+  help: "Current throughput of Horizon client operations",
+  labelNames: ["operation"],
+});
+
+export const horizonClientOperationSuccessRate = new client.Gauge({
+  name: "horizon_client_operation_success_rate",
+  help: "Success rate of Horizon client operations",
+  labelNames: ["operation"],
+});
+
+export const paymentMatchingOperations = new client.Counter({
+  name: "payment_matching_operations_total",
+  help: "Total number of payment matching operations",
+  labelNames: ["result"], // result: found, not_found
+});
+
+export const paymentMatchingErrors = new client.Counter({
+  name: "payment_matching_errors_total",
+  help: "Total number of payment matching errors",
+  labelNames: ["error_type"],
+});
+
+export const signatureVerificationOperations = new client.Counter({
+  name: "signature_verification_operations_total",
+  help: "Total number of signature verification operations",
+  labelNames: ["result"], // result: valid, invalid, error
+});
+
+export const signatureVerificationLatency = new client.Histogram({
+  name: "signature_verification_latency_seconds",
+  help: "Signature verification operation latency in seconds",
+  labelNames: ["result"],
+  buckets: [0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+});
+
+export const signatureVerificationReplayDetected = new client.Counter({
+  name: "signature_verification_replay_detected_total",
+  help: "Total number of signature replay attempts detected",
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -467,5 +742,49 @@ register.registerMetric(dashboardMetricsRequestDuration);
 register.registerMetric(dashboardMetricsErrorsTotal);
 register.registerMetric(dashboardMetricsCacheHitTotal);
 register.registerMetric(dashboardMetricsCacheMissTotal);
+register.registerMetric(webhookEventCacheHitTotal);
+register.registerMetric(webhookEventCacheMissTotal);
+register.registerMetric(webhookEventCacheSize);
+register.registerMetric(webhookEventDeduplicationCacheSize);
+register.registerMetric(webhookEventDeliveryAttemptsCached);
+register.registerMetric(fraudDetectionPaymentsAnalyzed);
+register.registerMetric(fraudDetectionRiskScore);
+register.registerMetric(fraudDetectionAnomaliesDetected);
+register.registerMetric(fraudDetectionBlockedPayments);
+register.registerMetric(fraudDetectionHighRiskDetected);
+register.registerMetric(fraudDetectionVelocityExceeded);
+register.registerMetric(fraudDetectionGeographicAnomaly);
+register.registerMetric(fraudDetectionMetadataAnomalies);
+register.registerMetric(fraudDetectionCacheSize);
+register.registerMetric(horizonClientOperations);
+register.registerMetric(horizonClientErrors);
+register.registerMetric(horizonClientRetries);
+register.registerMetric(horizonClientLatency);
+register.registerMetric(horizonClientRequestSize);
+register.registerMetric(horizonClientResponseSize);
+register.registerMetric(horizonClientCacheHits);
+register.registerMetric(horizonClientCacheMisses);
+register.registerMetric(horizonClientConnections);
+register.registerMetric(horizonClientQueueDepth);
+register.registerMetric(horizonClientBackpressure);
+register.registerMetric(horizonClientTimeouts);
+register.registerMetric(horizonClientCircuitBreakerTrips);
+register.registerMetric(horizonClientCircuitBreakerState);
+register.registerMetric(horizonClientHealthCheckDuration);
+register.registerMetric(horizonClientHealthCheckResult);
+register.registerMetric(horizonClientConcurrentOperations);
+register.registerMetric(horizonClientOperationDuration);
+register.registerMetric(horizonClientRetryAttemptDuration);
+register.registerMetric(horizonClientErrorRecovery);
+register.registerMetric(horizonClientDataValidationErrors);
+register.registerMetric(horizonClientSerializationErrors);
+register.registerMetric(horizonClientRateLimitWaitTime);
+register.registerMetric(horizonClientThroughput);
+register.registerMetric(horizonClientOperationSuccessRate);
+register.registerMetric(paymentMatchingOperations);
+register.registerMetric(paymentMatchingErrors);
+register.registerMetric(signatureVerificationOperations);
+register.registerMetric(signatureVerificationLatency);
+register.registerMetric(signatureVerificationReplayDetected);
 
 export { register };
