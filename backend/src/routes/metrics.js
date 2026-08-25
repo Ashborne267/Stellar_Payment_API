@@ -4,6 +4,11 @@ import { validateRequest } from "../lib/validation.js";
 import { metricsVolumeQuerySchema } from "../lib/request-schemas.js";
 import { metricService } from "../services/metricService.js";
 import { createDashboardMetricsRateLimit } from "../lib/rate-limit.js";
+import { connectRedisClient } from "../lib/redis.js";
+import {
+  dashboardMetricsCacheKey,
+  readThroughDashboardCache,
+} from "../lib/dashboard-metrics-cache.js";
 import {
   dashboardMetricsRequestsTotal,
   dashboardMetricsRequestDuration,
@@ -52,6 +57,9 @@ function withDashboardMetrics(endpoint, handler) {
  *    aggregate queries (issue #927).
  *  - withDashboardMetrics records per-endpoint request counts, latency, and
  *    error counts to Prometheus for operational visibility (issue #1093).
+ *  - readThroughDashboardCache serves a short-TTL Redis-cached response when
+ *    available, falling back to the DB (and re-caching) on a miss or when
+ *    Redis is unreachable (issue #1090).
  */
 function createMetricsRouter({
   dashboardMetricsRateLimit = defaultDashboardMetricsRateLimit,
@@ -75,7 +83,11 @@ function createMetricsRouter({
     requireApiKeyAuth({ requireSignature: true }),
     dashboardMetricsRateLimit,
     withDashboardMetrics("summary", async (req, res) => {
-      const result = await metricService.getMonthlySummary(req.merchant.id);
+      const redis = await connectRedisClient();
+      const key = dashboardMetricsCacheKey("summary", req.merchant.id);
+      const result = await readThroughDashboardCache(redis, "summary", key, () =>
+        metricService.getMonthlySummary(req.merchant.id),
+      );
       res.json(result);
     }),
   );
@@ -97,7 +109,11 @@ function createMetricsRouter({
     requireApiKeyAuth({ requireSignature: true }),
     dashboardMetricsRateLimit,
     withDashboardMetrics("revenue", async (req, res) => {
-      const result = await metricService.getRevenueByAsset(req.merchant.id);
+      const redis = await connectRedisClient();
+      const key = dashboardMetricsCacheKey("revenue", req.merchant.id);
+      const result = await readThroughDashboardCache(redis, "revenue", key, () =>
+        metricService.getRevenueByAsset(req.merchant.id),
+      );
       res.json(result);
     }),
   );
@@ -120,9 +136,10 @@ function createMetricsRouter({
     dashboardMetricsRateLimit,
     validateRequest({ query: metricsVolumeQuerySchema }),
     withDashboardMetrics("volume", async (req, res) => {
-      const result = await metricService.getVolumeOverTime(
-        req.merchant.id,
-        req.query.range,
+      const redis = await connectRedisClient();
+      const key = dashboardMetricsCacheKey("volume", req.merchant.id, req.query.range);
+      const result = await readThroughDashboardCache(redis, "volume", key, () =>
+        metricService.getVolumeOverTime(req.merchant.id, req.query.range),
       );
       res.json(result);
     }),

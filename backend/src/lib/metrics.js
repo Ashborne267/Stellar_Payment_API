@@ -397,6 +397,18 @@ export const dashboardMetricsErrorsTotal = new client.Counter({
   labelNames: ["endpoint", "error_type"],
 });
 
+export const dashboardMetricsCacheHitTotal = new client.Counter({
+  name: "dashboard_metrics_cache_hit_total",
+  help: "Total number of Admin Dashboard Service cache hits",
+  labelNames: ["endpoint"],
+});
+
+export const dashboardMetricsCacheMissTotal = new client.Counter({
+  name: "dashboard_metrics_cache_miss_total",
+  help: "Total number of Admin Dashboard Service cache misses",
+  labelNames: ["endpoint"],
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -453,5 +465,7 @@ register.registerMetric(oracleCircuitBreakerTripsTotal);
 register.registerMetric(dashboardMetricsRequestsTotal);
 register.registerMetric(dashboardMetricsRequestDuration);
 register.registerMetric(dashboardMetricsErrorsTotal);
+register.registerMetric(dashboardMetricsCacheHitTotal);
+register.registerMetric(dashboardMetricsCacheMissTotal);
 
 export { register };
