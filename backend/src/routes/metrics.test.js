@@ -77,7 +77,7 @@ describe("Metrics (Admin Dashboard) routes", () => {
     const response = await request(app).get("/api/metrics/summary");
 
     expect(response.status).toBe(200);
-    expect(mockGetMonthlySummary).toHaveBeenCalledWith(expect.anything(), "merchant_123");
+    expect(mockGetMonthlySummary).toHaveBeenCalledWith("merchant_123");
   });
 
   it("GET /api/metrics/volume validates the range query param", async () => {
@@ -95,6 +95,6 @@ describe("Metrics (Admin Dashboard) routes", () => {
     const response = await request(app).get("/api/metrics/volume?range=7D");
 
     expect(response.status).toBe(200);
-    expect(mockGetVolumeOverTime).toHaveBeenCalledWith(expect.anything(), "merchant_123", "7D");
+    expect(mockGetVolumeOverTime).toHaveBeenCalledWith("merchant_123", "7D");
   });
 });

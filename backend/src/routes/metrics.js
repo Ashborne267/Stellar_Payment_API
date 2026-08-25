@@ -39,8 +39,7 @@ function createMetricsRouter({
     dashboardMetricsRateLimit,
     async (req, res, next) => {
       try {
-        const pool = req.app.locals.pool;
-        const result = await metricService.getMonthlySummary(pool, req.merchant.id);
+        const result = await metricService.getMonthlySummary(req.merchant.id);
         res.json(result);
       } catch (err) {
         next(err);
@@ -66,8 +65,7 @@ function createMetricsRouter({
     dashboardMetricsRateLimit,
     async (req, res, next) => {
       try {
-        const pool = req.app.locals.pool;
-        const result = await metricService.getRevenueByAsset(pool, req.merchant.id);
+        const result = await metricService.getRevenueByAsset(req.merchant.id);
         res.json(result);
       } catch (err) {
         next(err);
@@ -94,9 +92,7 @@ function createMetricsRouter({
     validateRequest({ query: metricsVolumeQuerySchema }),
     async (req, res, next) => {
       try {
-        const pool = req.app.locals.pool;
         const result = await metricService.getVolumeOverTime(
-          pool,
           req.merchant.id,
           req.query.range,
         );
