@@ -4,7 +4,6 @@ import {
   findMatchingPayment,
   createRefundTransaction,
   findStrictReceivePaths,
-  isValidStellarPublicKey,
   verifyTransactionSignature,
 } from "../lib/stellar.js";
 import { resolveBrandingConfig } from "../lib/branding.js";
@@ -28,9 +27,24 @@ import {
 } from "../lib/metrics.js";
 import { paymentSignatureVerifier } from "../lib/payment-signature-verification.js";
 import { logger } from "../lib/logger.js";
+import {
+  resolveAndValidateIssuer,
+  validatePerAssetLimits,
+  validateAllowedIssuers,
+} from "../lib/payment-session-rules.js";
+import { getSupabaseClient } from "../lib/supabase-client.js";
+import {
+  paymentProcessorSessionsTotal,
+  paymentProcessorSessionDuration,
+  paymentProcessorVerificationsTotal,
+  paymentProcessorVerificationDuration,
+  paymentProcessorStatusCacheHits,
+  paymentProcessorStatusCacheMisses,
+  paymentProcessorRefundsTotal,
+  paymentProcessorListRequestsTotal,
+} from "../lib/payment-processor-metrics.js";
 
 const SAFE_METADATA_KEY_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-let supabaseClientPromise;
 
 function applyPaymentFilters(query, filters) {
   const { status, asset, date_from: dateFrom, date_to: dateTo, search } = filters;
@@ -89,14 +103,6 @@ function applyPaymentFilters(query, filters) {
   }
 
   return query;
-}
-
-async function getSupabaseClient() {
-  if (!supabaseClientPromise) {
-    supabaseClientPromise = import("../lib/supabase.js").then((module) => module.supabase);
-  }
-
-  return supabaseClientPromise;
 }
 
 async function verifyTransactionSignatureIfAvailable(txHash, merchantId = null) {
@@ -452,18 +458,25 @@ async function getRollingMetricsViaSupabase(merchantId) {
 
 export const paymentService = {
   async createPaymentSession(merchant, body) {
+    const sessionStart = Date.now();
+    const recordSessionOutcome = (outcome) => {
+      paymentProcessorSessionsTotal.inc({ asset: body.asset, outcome });
+      paymentProcessorSessionDuration.observe(
+        { asset: body.asset, outcome },
+        (Date.now() - sessionStart) / 1000,
+      );
+    };
     const supabase = await getSupabaseClient();
     const asset = body.asset?.toUpperCase();
-    const assetIssuer = resolveAssetIssuer(asset, body.asset_issuer);
 
-    if (asset !== "XLM" && !assetIssuer) {
-      const error = new Error("asset_issuer is required for non-native assets");
-      error.status = 400;
-      throw error;
-    }
-
-    if (asset !== "XLM" && !isValidStellarPublicKey(assetIssuer)) {
-      const error = new Error("asset_issuer must be a valid Stellar public key");
+    // Shared business-rule validation (issue #1087) — issuer presence/format.
+    const { assetIssuer, rejection: issuerRejection } = resolveAndValidateIssuer(
+      asset,
+      body.asset_issuer,
+    );
+    if (issuerRejection) {
+      recordSessionOutcome("validation_failed");
+      const error = new Error(issuerRejection.message);
       error.status = 400;
       throw error;
     }
@@ -488,43 +501,34 @@ export const paymentService = {
       }
     }
 
-    // Per-asset payment limit validation
-    const limits = merchant.payment_limits;
-    if (limits && typeof limits === "object") {
-      const assetLimits = limits[body.asset];
-      if (assetLimits) {
-        if (assetLimits.min !== undefined && body.amount < assetLimits.min) {
-          paymentFailedCounter.inc({ asset: body.asset, reason: "below_min" });
-          const error = new Error(`Amount is below the minimum for ${body.asset}`);
-          error.status = 400;
-          error.details = {
-            min: assetLimits.min,
-            delta: Number((assetLimits.min - body.amount).toFixed(7)),
-          };
-          throw error;
-        }
-        if (assetLimits.max !== undefined && body.amount > assetLimits.max) {
-          paymentFailedCounter.inc({ asset: body.asset, reason: "above_max" });
-          const error = new Error(`Amount exceeds the maximum for ${body.asset}`);
-          error.status = 400;
-          error.details = {
-            max: assetLimits.max,
-            delta: Number((body.amount - assetLimits.max).toFixed(7)),
-          };
-          throw error;
-        }
-      }
+    // Shared business-rule validation (issue #1087) — per-asset limits.
+    const limitRejection = validatePerAssetLimits({
+      rawAsset: body.asset,
+      amount: body.amount,
+      paymentLimits: merchant.payment_limits,
+    });
+    if (limitRejection) {
+      paymentFailedCounter.inc({ asset: body.asset, reason: limitRejection.reason });
+      recordSessionOutcome("validation_failed");
+      const error = new Error(limitRejection.message);
+      error.status = 400;
+      error.details = limitRejection.details;
+      throw error;
     }
 
-    // Allowed-issuers check
+    // Shared business-rule validation (issue #1087) — allowed issuers.
     const allowedIssuers = merchant.allowed_issuers;
-    if (asset !== "XLM" && Array.isArray(allowedIssuers) && allowedIssuers.length > 0) {
-      if (!assetIssuer || !allowedIssuers.includes(assetIssuer)) {
-        paymentFailedCounter.inc({ asset: body.asset, reason: "invalid_issuer" });
-        const error = new Error("asset_issuer is not in the merchant's list of allowed issuers");
-        error.status = 400;
-        throw error;
-      }
+    const allowlistRejection = validateAllowedIssuers({
+      asset,
+      assetIssuer,
+      allowedIssuers,
+    });
+    if (allowlistRejection) {
+      paymentFailedCounter.inc({ asset: body.asset, reason: "invalid_issuer" });
+      recordSessionOutcome("validation_failed");
+      const error = new Error(allowlistRejection.message);
+      error.status = 400;
+      throw error;
     }
 
     const paymentId = randomUUID();
@@ -576,11 +580,13 @@ export const paymentService = {
 
     if (insertError) {
       insertError.status = 500;
+      recordSessionOutcome("persistence_failed");
       throw insertError;
     }
 
     // Record metric for payment creation
     paymentCreatedCounter.inc({ asset: body.asset });
+    recordSessionOutcome("created");
 
     return {
       payment_id: paymentId,
@@ -596,8 +602,10 @@ export const paymentService = {
     const redis = await connectRedisClient();
     const cached = await getCachedPayment(redis, paymentId);
     if (cached) {
+      paymentProcessorStatusCacheHits.inc();
       return { payment: cached };
     }
+    paymentProcessorStatusCacheMisses.inc();
 
     let query = supabase
       .from("payments")
@@ -642,6 +650,14 @@ export const paymentService = {
   },
 
   async verifyPayment(paymentId, merchantId = null, io = null) {
+    const verifyStart = Date.now();
+    const recordVerificationOutcome = (outcome) => {
+      paymentProcessorVerificationsTotal.inc({ asset: "unknown", outcome });
+      paymentProcessorVerificationDuration.observe(
+        { asset: "unknown", outcome },
+        (Date.now() - verifyStart) / 1000,
+      );
+    };
     const supabase = await getSupabaseClient();
     let query = supabase
       .from("payments")
@@ -670,6 +686,7 @@ export const paymentService = {
     }
 
     if (data.status === "confirmed") {
+      recordVerificationOutcome("already_confirmed");
       return {
         status: "confirmed",
         tx_id: data.tx_id,
@@ -703,11 +720,13 @@ export const paymentService = {
           },
           "Payment verification: transaction signature verification failed",
         );
+        recordVerificationOutcome("signature_invalid");
         return { status: "pending" };
       }
     }
 
     if (!match) {
+      recordVerificationOutcome("pending_no_match");
       return { status: "pending" };
     }
 
@@ -737,6 +756,11 @@ export const paymentService = {
     // Record metrics
     paymentConfirmedCounter.inc({ asset: data.asset });
     paymentConfirmationLatency.observe({ asset: data.asset }, latencySeconds);
+    paymentProcessorVerificationsTotal.inc({ asset: data.asset, outcome: "confirmed" });
+    paymentProcessorVerificationDuration.observe(
+      { asset: data.asset, outcome: "confirmed" },
+      (Date.now() - verifyStart) / 1000,
+    );
 
     if (io && data.merchant_id) {
       io.to(`merchant:${data.merchant_id}`).emit("payment:confirmed", {
@@ -803,8 +827,11 @@ export const paymentService = {
     const offset = (page - 1) * limit;
 
     try {
-      return await getMerchantPaymentsViaPool(merchantId, queryParams, page, limit, offset);
+      const result = await getMerchantPaymentsViaPool(merchantId, queryParams, page, limit, offset);
+      paymentProcessorListRequestsTotal.inc({ outcome: "success" });
+      return result;
     } catch {
+      paymentProcessorListRequestsTotal.inc({ outcome: "pool_fallback" });
       return getMerchantPaymentsViaSupabase(merchantId, queryParams, page, limit, offset);
     }
   },
@@ -838,12 +865,14 @@ export const paymentService = {
     }
 
     if (payment.status !== "confirmed") {
+      paymentProcessorRefundsTotal.inc({ stage: "generate", outcome: "rejected" });
       const err = new Error("Only confirmed payments can be refunded");
       err.status = 400;
       throw err;
     }
 
     if (payment.metadata?.refund_status === "refunded") {
+      paymentProcessorRefundsTotal.inc({ stage: "generate", outcome: "rejected" });
       const err = new Error("Payment already refunded");
       err.status = 400;
       throw err;
@@ -881,6 +910,8 @@ export const paymentService = {
         },
       })
       .eq("id", payment.id);
+
+    paymentProcessorRefundsTotal.inc({ stage: "generate", outcome: "success" });
 
     return {
       xdr: refundTx.xdr,
@@ -923,6 +954,8 @@ export const paymentService = {
         },
       })
       .eq("id", payment.id);
+
+    paymentProcessorRefundsTotal.inc({ stage: "confirm", outcome: "success" });
 
     return { message: "Refund confirmed successfully" };
   },
