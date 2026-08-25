@@ -212,6 +212,23 @@ describe("Fraud Detection Engine", () => {
       expect(analysis1).toEqual(analysis2);
     });
 
+    it("does not reuse cached risk when payment amount changes", () => {
+      const basePayment = {
+        id: "pay-cache-amount",
+        merchant_id: "merchant-cache",
+        recipient: "GBRPYHIL2CI3WHZDTOOQFC6EB4RBMAJVMBARWIOYBETLWGEFRES4KXO4",
+        asset: "USDC",
+        status: "pending",
+        created_at: new Date().toISOString(),
+      };
+
+      const lowRisk = analyzePayment({ ...basePayment, amount: "100" });
+      const higherRisk = analyzePayment({ ...basePayment, amount: "500000" });
+
+      expect(higherRisk.riskScore).toBeGreaterThan(lowRisk.riskScore);
+      expect(getCacheStats().cacheSize).toBeGreaterThanOrEqual(2);
+    });
+
     it("marks payment as high risk at 75+ score", () => {
       const payment = {
         id: "pay-009",
