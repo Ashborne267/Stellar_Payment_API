@@ -41,6 +41,8 @@ const VELOCITY_LIMITS = {
 };
 
 const LARGE_AMOUNT_THRESHOLD = 50000;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const MAX_RISK_CACHE_ENTRIES = 1000;
 const SUSPICIOUS_MEMO_PATTERNS = [
   /test|fake|dummy/i,
   /admin|root|system/i,
@@ -51,8 +53,36 @@ let riskScoreCache = new Map();
 let velocityTracker = new Map();
 
 function generatePaymentHash(payment) {
-  const { merchant_id, recipient, asset } = payment;
-  return `${merchant_id}:${recipient}:${asset}`;
+  const metadataFingerprint =
+    payment.metadata && typeof payment.metadata === "object"
+      ? JSON.stringify(payment.metadata)
+      : "";
+  return [
+    payment.merchant_id ?? "",
+    payment.recipient ?? "",
+    payment.asset ?? "",
+    payment.amount ?? "",
+    payment.status ?? "",
+    payment.created_at ?? "",
+    payment.memo ?? "",
+    metadataFingerprint,
+  ].join(":");
+}
+
+function pruneRiskScoreCache(now = Date.now()) {
+  for (const [key, value] of riskScoreCache.entries()) {
+    if (now - value.timestamp >= CACHE_TTL_MS) {
+      riskScoreCache.delete(key);
+    }
+  }
+
+  while (riskScoreCache.size > MAX_RISK_CACHE_ENTRIES) {
+    const oldestKey = riskScoreCache.keys().next().value;
+    if (!oldestKey) break;
+    riskScoreCache.delete(oldestKey);
+  }
+
+  fraudDetectionCacheSize.set(riskScoreCache.size);
 }
 
 function getCacheKey(key) {
@@ -261,7 +291,7 @@ export function analyzePayment(payment, options = {}) {
   const cacheKey = generatePaymentHash(payment);
   const cached = riskScoreCache.get(cacheKey);
 
-  if (cached && Date.now() - cached.timestamp < 300000) {
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
     return cached.analysis;
   }
 
@@ -338,8 +368,7 @@ export function analyzePayment(payment, options = {}) {
     analysis,
     timestamp: Date.now(),
   });
-
-  fraudDetectionCacheSize.set(riskScoreCache.size);
+  pruneRiskScoreCache();
 
   logger.debug(
     {
@@ -372,9 +401,12 @@ export function getRiskLevel(score) {
 }
 
 export function getCacheStats() {
+  pruneRiskScoreCache();
   return {
     cacheSize: riskScoreCache.size,
     velocityTrackerSize: velocityTracker.size,
+    maxCacheEntries: MAX_RISK_CACHE_ENTRIES,
+    cacheTtlMs: CACHE_TTL_MS,
   };
 }
 
