@@ -1,6 +1,26 @@
+/**
+ * Stellar Horizon Client - Main Facade
+ * 
+ * This module provides the main interface for Stellar Horizon operations,
+ * refactored into modular components for better maintainability and testability.
+ * 
+ * Architecture:
+ * - HorizonClient: Handles all Horizon API communication with retry logic
+ * - Validators: Input validation and asset management
+ * - PaymentOperations: Payment matching and transaction processing
+ * - SignatureVerification: Cryptographic signature validation
+ * 
+ * This facade maintains backward compatibility with the existing API while
+ * providing a cleaner, more modular architecture.
+ */
+
 import "dotenv/config";
 import * as StellarSdk from "stellar-sdk";
 import { logger } from "./logger.js";
+import { HorizonClient } from "./stellar/horizon-client.js";
+import * as validators from "./stellar/validators.js";
+import * as paymentOperations from "./stellar/payment-operations.js";
+import * as signatureVerification from "./stellar/signature-verification.js";
 import {
   exchangeRateQuoteRequests,
   exchangeRateQuoteDuration,
@@ -14,6 +34,7 @@ import {
   signatureVerificationReplayAttempts,
 } from "./metrics.js";
 
+// Configuration
 const NETWORK = (process.env.STELLAR_NETWORK || "testnet").toLowerCase();
 const HORIZON_URL = (
   process.env.STELLAR_HORIZON_URL ||
@@ -22,71 +43,15 @@ const HORIZON_URL = (
     : "https://horizon-testnet.stellar.org")
 ).replace(/\/$/, "");
 
-const server = new StellarSdk.Horizon.Server(HORIZON_URL);
-const HORIZON_HEALTH_TIMEOUT_MS = 2_000;
-const HORIZON_RETRY_DELAYS_MS = [150, 500];
-const HORIZON_CACHE_TTL_MS = Number.parseInt(
-  process.env.HORIZON_CACHE_TTL_MS || "15000",
-  10,
-);
-const HORIZON_CACHE_MAX_ENTRIES = Number.parseInt(
-  process.env.HORIZON_CACHE_MAX_ENTRIES || "250",
-  10,
-);
-const horizonResponseCache = new Map();
+const NETWORK_PASSPHRASE =
+  NETWORK === "public"
+    ? StellarSdk.Networks.PUBLIC
+    : StellarSdk.Networks.TESTNET;
 
-function isHorizonCacheEnabled() {
-  return HORIZON_CACHE_TTL_MS > 0 && HORIZON_CACHE_MAX_ENTRIES > 0;
-}
+// Create singleton Horizon client instance
+const horizonClient = new HorizonClient(HORIZON_URL, NETWORK_PASSPHRASE);
 
-function pruneHorizonCache(now = Date.now()) {
-  for (const [key, entry] of horizonResponseCache.entries()) {
-    if (entry.expiresAt <= now) {
-      horizonResponseCache.delete(key);
-    }
-  }
-
-  while (horizonResponseCache.size > HORIZON_CACHE_MAX_ENTRIES) {
-    const oldestKey = horizonResponseCache.keys().next().value;
-    if (!oldestKey) break;
-    horizonResponseCache.delete(oldestKey);
-  }
-
-  horizonCacheEntries.set(horizonResponseCache.size);
-}
-
-async function cachedHorizonCall(operation, cacheKey, request, context = "") {
-  if (!isHorizonCacheEnabled()) {
-    return withHorizonRetry(request, context);
-  }
-
-  const now = Date.now();
-  const key = `${NETWORK}:${HORIZON_URL}:${operation}:${cacheKey}`;
-  const cached = horizonResponseCache.get(key);
-  if (cached && cached.expiresAt > now) {
-    horizonCacheHitsTotal.inc({ operation });
-    return cached.value;
-  }
-
-  horizonCacheMissesTotal.inc({ operation });
-  const value = await withHorizonRetry(request, context);
-  pruneHorizonCache(now);
-  horizonResponseCache.set(key, {
-    value,
-    expiresAt: now + HORIZON_CACHE_TTL_MS,
-  });
-  horizonCacheEntries.set(horizonResponseCache.size);
-  return value;
-}
-
-export function clearHorizonCache() {
-  horizonResponseCache.clear();
-  horizonCacheEntries.set(0);
-}
-
-const STELLAR_PUBLIC_KEY_PATTERN = /^G[A-Z2-7]{55}$/;
-const ASSET_CODE_PATTERN = /^[A-Z0-9]{1,12}$/;
-
+// Utility functions
 function parseStroops(value) {
   const parsed = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -96,196 +61,40 @@ function stroopsToXlm(stroops) {
   return (stroops / 10_000_000).toFixed(7);
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// Export validators
+export const isValidStellarAccountId = validators.isValidStellarAccountId;
+export const isValidStellarPublicKey = validators.isValidStellarPublicKey;
+export const isValidAssetCode = validators.isValidAssetCode;
+export const validateMemo = validators.validateMemo;
+export const resolveAsset = validators.resolveAsset;
+export const isValidTransactionHash = validators.isValidTransactionHash;
+export const classifyAmount = validators.classifyAmount;
 
-function getHorizonStatus(err) {
-  return err?.response?.status ?? err?.status ?? null;
-}
+// Export payment operations
+export const findMatchingPayment = (params) => 
+  paymentOperations.findMatchingPayment(horizonClient, params);
 
-function isRetryableHorizonError(err) {
-  const status = getHorizonStatus(err);
-  if (status === 408 || status === 429) {
-    return true;
-  }
+export const findAnyRecentPayment = (params) => 
+  paymentOperations.findAnyRecentPayment(horizonClient, params);
 
-  if (typeof status === "number" && status >= 500) {
-    return true;
-  }
+export const createRefundTransaction = (params) => 
+  paymentOperations.createRefundTransaction(horizonClient, {
+    ...params,
+    networkPassphrase: NETWORK_PASSPHRASE
+  });
 
-  const code = String(err?.code || "").toUpperCase();
-  if (
-    [
-      "ECONNABORTED",
-      "ECONNREFUSED",
-      "ECONNRESET",
-      "ENETUNREACH",
-      "EHOSTUNREACH",
-      "ETIMEDOUT",
-      "UND_ERR_CONNECT_TIMEOUT",
-      "UND_ERR_SOCKET",
-    ].includes(code)
-  ) {
-    return true;
-  }
-
-  if (err?.name === "AbortError") {
-    return true;
-  }
-
-  return /timeout|temporar|network|socket|fetch failed/i.test(
-    String(err?.message || ""),
+// Export signature verification
+export const verifyTransactionSignature = (txHash, options) =>
+  signatureVerification.verifyTransactionSignature(
+    horizonClient,
+    txHash,
+    NETWORK_PASSPHRASE,
+    options
   );
-}
 
-async function withHorizonRetry(operation, context = "") {
-  let lastError = null;
-
-  for (let attempt = 0; attempt <= HORIZON_RETRY_DELAYS_MS.length; attempt += 1) {
-    try {
-      return await operation();
-    } catch (err) {
-      lastError = err;
-      if (!isRetryableHorizonError(err) || attempt === HORIZON_RETRY_DELAYS_MS.length) {
-        throw handleHorizonError(err, context);
-      }
-
-      await sleep(HORIZON_RETRY_DELAYS_MS[attempt]);
-    }
-  }
-
-  throw handleHorizonError(lastError, context);
-}
-
-export function isValidStellarAccountId(value) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return false;
-  }
-
-  return StellarSdk.StrKey.isValidEd25519PublicKey(value.trim());
-}
-
-export function isValidAssetCode(value) {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  return /^[A-Z0-9]{1,12}$/.test(value.trim().toUpperCase());
-}
-
-/**
- * Validates Stellar memo format based on memo type
- * @param {string} memo - The memo value
- * @param {string} memoType - The memo type (text, id, hash, return)
- * @returns {{ valid: boolean, error?: string }}
- */
-export function validateMemo(memo, memoType) {
-  if (!memo || !memoType) {
-    return { valid: true };
-  }
-
-  const normalizedType = memoType.toLowerCase();
-
-  switch (normalizedType) {
-    case "text":
-      // TEXT memos must be <= 28 bytes UTF-8
-      if (Buffer.byteLength(memo, "utf8") > 28) {
-        return {
-          valid: false,
-          error: "TEXT memo must be 28 bytes or less (UTF-8 encoded)",
-        };
-      }
-      return { valid: true };
-
-    case "id":
-      // ID memos must be unsigned 64-bit integers (0 to 18446744073709551615)
-      if (!/^\d+$/.test(memo)) {
-        return {
-          valid: false,
-          error: "memo must be a valid unsigned 64-bit integer when memo_type is id",
-        };
-      }
-      try {
-        const value = BigInt(memo);
-        if (value < 0n || value > 18446744073709551615n) {
-          return {
-            valid: false,
-            error: "ID memo must be between 0 and 18446744073709551615",
-          };
-        }
-      } catch {
-        return {
-          valid: false,
-          error: "ID memo must be a valid unsigned 64-bit integer",
-        };
-      }
-      return { valid: true };
-
-    case "hash":
-      // HASH memos must be exactly 32 bytes (64 hex characters)
-      if (!/^[0-9a-fA-F]{64}$/.test(memo)) {
-        return {
-          valid: false,
-          error: "memo must be a 32-byte hex string (64 characters) when memo_type is hash",
-        };
-      }
-      return { valid: true };
-
-    case "return":
-      // RETURN memos can be either 32-byte hex or a valid unsigned 64-bit ID
-      const isHex = /^[0-9a-fA-F]{64}$/.test(memo);
-      let isValidId = false;
-
-      if (/^\d+$/.test(memo)) {
-        try {
-          const val = BigInt(memo);
-          isValidId = val >= 0n && val <= 18446744073709551615n;
-        } catch {
-          isValidId = false;
-        }
-      }
-
-      if (!isHex && !isValidId) {
-        return {
-          valid: false,
-          error: "memo must be a valid unsigned 64-bit integer or a 32-byte hex string (64 characters) when memo_type is return",
-        };
-      }
-      return { valid: true };
-
-    default:
-      return {
-        valid: false,
-        error: `Invalid memo type: ${memoType}. Must be one of: text, id, hash, return`,
-      };
-  }
-}
-
+// Export Horizon client operations
 export async function isHorizonReachable() {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(
-    () => controller.abort(),
-    HORIZON_HEALTH_TIMEOUT_MS,
-  );
-
-  try {
-    const response = await fetch(HORIZON_URL, {
-      method: "GET",
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    // Treat rate limiting as reachable so transient Horizon throttling
-    // doesn't fail the entire API health check.
-    return response.ok || response.status === 429;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  return horizonClient.isReachable();
 }
 
 export function resolveAsset(assetCode, assetIssuer) {
@@ -786,12 +595,7 @@ export async function getNetworkFeeStats(operationCount = 1) {
       Number.isInteger(operationCount) && operationCount > 0
         ? operationCount
         : 1;
-    const feeStats = await cachedHorizonCall(
-      "fee_stats",
-      "latest",
-      () => server.feeStats(),
-      "fee stats",
-    );
+    const feeStats = await horizonClient.getFeeStats();
     const lastLedgerBaseFee = parseStroops(feeStats.last_ledger_base_fee);
     const chargedMode = parseStroops(feeStats.fee_charged?.mode);
     const chargedP50 = parseStroops(feeStats.fee_charged?.p50);
@@ -814,7 +618,109 @@ export async function getNetworkFeeStats(operationCount = 1) {
       maxFee: feeStats.max_fee ?? null,
     };
   } catch (err) {
-    throw handleHorizonError(err, "fee stats");
+    // Let Horizon client handle error wrapping
+    throw err;
+  }
+}
+
+/**
+ * Query Horizon for strict-receive paths
+ * Returns the best path the sender can use to deliver `destAmount` of the
+ * destination asset, sending from `sourceAsset`.
+ */
+export async function findStrictReceivePaths({
+  sourceAccount,
+  destAssetCode,
+  destAssetIssuer,
+  destAmount,
+  sourceAssetCode,
+  sourceAssetIssuer,
+}) {
+  const startTime = Date.now();
+  const destAsset = validators.resolveAsset(destAssetCode, destAssetIssuer);
+  const sourceAsset = validators.resolveAsset(sourceAssetCode, sourceAssetIssuer);
+  const assetLabels = {
+    source_asset: sourceAssetCode || "native",
+    dest_asset: destAssetCode || "native",
+  };
+
+  try {
+    if (sourceAccount) {
+      try {
+        await horizonClient.loadAccount(sourceAccount);
+        exchangeRateSourceAccountValidation.inc({ result: "valid" });
+      } catch (accountErr) {
+        exchangeRateSourceAccountValidation.inc({ result: "not_found" });
+        throw accountErr;
+      }
+    } else {
+      exchangeRateSourceAccountValidation.inc({ result: "skipped" });
+    }
+
+    const result = await horizonClient.findStrictReceivePaths(
+      [sourceAsset],
+      destAsset,
+      destAmount
+    );
+    
+    exchangeRateHorizonCalls.inc({ 
+      operation: "strict_receive_paths", 
+      status: "success" 
+    });
+
+    if (!result.records || result.records.length === 0) {
+      exchangeRateQuoteRequests.inc({ ...assetLabels, result: "not_found" });
+      exchangeRateQuoteDuration.observe(
+        { ...assetLabels, result: "not_found" },
+        (Date.now() - startTime) / 1000
+      );
+      return null;
+    }
+
+    // Return the best (first) path
+    const best = result.records[0];
+    const sourceAmount = Number(best.source_amount);
+    if (!Number.isFinite(sourceAmount) || sourceAmount <= 0) {
+      const error = new Error("Horizon returned an invalid path payment quote");
+      error.status = 502;
+      throw error;
+    }
+
+    exchangeRateQuoteRequests.inc({ ...assetLabels, result: "success" });
+    exchangeRateQuoteDuration.observe(
+      { ...assetLabels, result: "success" },
+      (Date.now() - startTime) / 1000
+    );
+
+    return {
+      source_amount: best.source_amount,
+      source_asset_code:
+        best.source_asset_type === "native" ? "XLM" : best.source_asset_code,
+      source_asset_issuer: best.source_asset_issuer || null,
+      destination_amount: best.destination_amount,
+      path: best.path.map((p) => ({
+        asset_code: p.asset_type === "native" ? "XLM" : p.asset_code,
+        asset_issuer: p.asset_issuer || null,
+      })),
+    };
+  } catch (err) {
+    exchangeRateQuoteRequests.inc({ ...assetLabels, result: "error" });
+    exchangeRateQuoteDuration.observe(
+      { ...assetLabels, result: "error" },
+      (Date.now() - startTime) / 1000
+    );
+
+    exchangeRateHorizonCalls.inc({ 
+      operation: "strict_receive_paths", 
+      status: "error" 
+    });
+
+    if (!err?.status) {
+      // Let Horizon client handle error wrapping
+      throw err;
+    }
+
+    throw err;
   }
 }
 
@@ -822,310 +728,9 @@ export async function getStellarConfig() {
   return {
     network: NETWORK,
     horizonUrl: HORIZON_URL,
+    ...horizonClient.getConfig(),
   };
 }
 
-/**
- * Result object returned by verifyTransactionSignature.
- * @typedef {Object} SignatureVerificationResult
- * @property {boolean} valid          - Whether the transaction passes all checks.
- * @property {string}  reason         - Human-readable explanation of the result.
- * @property {boolean} isMultiSig     - Whether the source account uses multi-sig.
- * @property {number}  signatureCount - Number of signatures present in the envelope.
- * @property {boolean} thresholdMet   - Whether the signing weight meets the medium threshold.
- * @property {boolean} [isFeeBump]    - Whether the envelope was a fee-bump (the inner transaction was verified).
- */
-
-/**
- * Performs full cryptographic signature verification for a Stellar transaction.
- *
- * Verification steps:
- *  1. Fetch the transaction envelope from Horizon.
- *  2. Deserialise the XDR envelope and confirm at least one signature is present.
- *  3. Load the source account to obtain its current signer list and thresholds.
- *  4. For each signature in the envelope, derive the signer's public key via
- *     Ed25519 key-recovery and check it against the account's authorised signers.
- *  5. Accumulate signing weight and verify it meets the account's medium threshold
- *     (used for payment operations).
- *
- * Falls back gracefully: if the account cannot be loaded (e.g. Horizon is
- * temporarily unavailable) the function returns `valid: false` rather than
- * throwing, so the Ledger Monitor can skip the payment safely.
- *
- * Enhanced error recovery (Issue #781):
- *  - Automatic retry with exponential backoff for transient network errors
- *  - Detailed error logging with context for debugging
- *  - Graceful degradation when Horizon is temporarily unavailable
- *  - Circuit breaker pattern to prevent cascading failures
- *
- * @param {string} txHash - The transaction hash to verify.
- * @param {Object} options - Optional configuration
- * @param {number} options.maxRetries - Maximum number of retry attempts (default: 3)
- * @param {number} options.retryDelay - Initial retry delay in ms (default: 1000)
- * @returns {Promise<SignatureVerificationResult>}
- */
-export async function verifyTransactionSignature(txHash, options = {}) {
-  const { maxRetries = 3, retryDelay = 1000 } = options;
-  const startTime = Date.now();
-  
-  if (!txHash || typeof txHash !== "string") {
-    logger.error({
-      txHash,
-      type: typeof txHash,
-    }, "verifyTransactionSignature: Invalid input");
-    signatureVerificationTotal.inc({ result: "error" });
-    signatureVerificationDuration.observe({ result: "error" }, (Date.now() - startTime) / 1000);
-    return {
-      valid: false,
-      reason: "Invalid transaction hash provided",
-      isMultiSig: false,
-      signatureCount: 0,
-      thresholdMet: false,
-    };
-  }
-
-  const passphrase =
-    NETWORK === "public"
-      ? StellarSdk.Networks.PUBLIC
-      : StellarSdk.Networks.TESTNET;
-
-  // ── Step 1: Fetch transaction envelope from Horizon with retry logic ──────
-  let tx;
-  let retryCount = 0;
-  
-  while (retryCount <= maxRetries) {
-    try {
-      tx = await cachedHorizonCall(
-        "transaction",
-        txHash,
-        () => server.transactions().transaction(txHash).call(),
-        `transaction ${txHash}`,
-      );
-      break; // Success, exit retry loop
-    } catch (err) {
-      const wrapped = err?.status ? err : handleHorizonError(err, `transaction ${txHash}`);
-      const isTransient = err?.response?.status >= 500 || err?.code === 'ECONNREFUSED' || err?.code === 'ETIMEDOUT';
-      
-      if (isTransient && retryCount < maxRetries) {
-        const delay = retryDelay * Math.pow(2, retryCount); // Exponential backoff
-        logger.warn({
-          txHash,
-          retry: retryCount + 1,
-          maxRetries,
-          delayMs: delay,
-          error: wrapped.message,
-        }, "verifyTransactionSignature: Transient error, retrying");
-        await new Promise(resolve => setTimeout(resolve, delay));
-        retryCount++;
-        continue;
-      }
-      
-      logger.error({
-        txHash,
-        errorStatus: err?.response?.status,
-        errorCode: err?.code,
-        retryCount,
-        error: wrapped.message,
-      }, "verifyTransactionSignature: Failed to fetch transaction");
-      signatureVerificationTotal.inc({ result: "error" });
-      signatureVerificationDuration.observe({ result: "error" }, (Date.now() - startTime) / 1000);
-      return {
-        valid: false,
-        reason: `Failed to fetch transaction from Horizon: ${wrapped.message}`,
-        isMultiSig: false,
-        signatureCount: 0,
-        thresholdMet: false,
-      };
-    }
-  }
-
-  // ── Step 2: Deserialise XDR envelope (supports fee-bump transactions) ─────
-  let transaction;
-  let isFeeBump = false;
-  try {
-    transaction = new StellarSdk.Transaction(tx.envelope_xdr, passphrase);
-  } catch (parseErr) {
-    // The Transaction constructor cannot parse a fee-bump envelope. Unwrap it
-    // and verify the INNER transaction's signatures: the fee-bump's own
-    // signature only authorises the fee payer, not the payment, so verifying
-    // the wrapper alone would let an attacker fee-bump someone else's unsigned
-    // transaction. Verifying the inner transaction closes that gap.
-    try {
-      const envelope = StellarSdk.TransactionBuilder.fromXDR(tx.envelope_xdr, passphrase);
-      if (envelope instanceof StellarSdk.FeeBumpTransaction) {
-        transaction = envelope.innerTransaction;
-        isFeeBump = true;
-      } else {
-        throw parseErr;
-      }
-    } catch (err) {
-      logger.error({
-        txHash,
-        xdrLength: tx.envelope_xdr?.length,
-        errorName: err.name,
-        errorMessage: err.message,
-      }, "verifyTransactionSignature: Failed to parse XDR");
-      signatureVerificationTotal.inc({ result: "error" });
-      signatureVerificationDuration.observe({ result: "error" }, (Date.now() - startTime) / 1000);
-      return {
-        valid: false,
-        reason: `Failed to parse transaction XDR: ${err.message}`,
-        isMultiSig: false,
-        signatureCount: 0,
-        thresholdMet: false,
-      };
-    }
-  }
-
-  const signatures = transaction.signatures;
-  if (!signatures || signatures.length === 0) {
-    logger.warn({
-      txHash,
-    }, "verifyTransactionSignature: No signatures found");
-    signatureVerificationTotal.inc({ result: "invalid" });
-    signatureVerificationDuration.observe({ result: "invalid" }, (Date.now() - startTime) / 1000);
-    return {
-      valid: false,
-      reason: "Transaction envelope contains no signatures",
-      isMultiSig: false,
-      signatureCount: 0,
-      thresholdMet: false,
-    };
-  }
-
-  // ── Step 3: Load source account signers & thresholds ─────────────────────
-  const sourceAccountId = transaction.source;
-  let accountData;
-  try {
-    accountData = await cachedHorizonCall(
-      "load_account",
-      sourceAccountId,
-      () => server.loadAccount(sourceAccountId),
-      `source account ${sourceAccountId}`,
-    );
-  } catch (err) {
-    // Non-fatal: if we cannot load the account we cannot verify weights.
-    // Return valid=false so the caller can decide whether to skip or retry.
-    logger.warn({
-      txHash,
-      sourceAccountId,
-      errorStatus: err?.response?.status,
-      errorMessage: err.message,
-    }, "verifyTransactionSignature: Could not load source account");
-    signatureVerificationTotal.inc({ result: "error" });
-    signatureVerificationDuration.observe({ result: "error" }, (Date.now() - startTime) / 1000);
-    return {
-      valid: false,
-      reason: `Could not load source account for weight verification: ${err.message}`,
-      isMultiSig: false,
-      signatureCount: signatures.length,
-      thresholdMet: false,
-    };
-  }
-
-  const signers = accountData.signers ?? [];
-  const medThreshold = accountData.thresholds?.med_threshold ?? 0;
-  const isMultiSig = signers.length > 1 || medThreshold > 1;
-
-  // Build a lookup map: publicKey → weight for O(1) access
-  const signerWeightMap = new Map(
-    signers.map((s) => [s.key, s.weight])
-  );
-
-  // ── Step 4: Verify each signature cryptographically ──────────────────────
-  // The transaction hash is the payload that was signed.
-  const txHashBytes = transaction.hash();
-
-  let totalWeight = 0;
-  let validSignatureCount = 0;
-  const usedSigners = new Set(); // Prevent signature replay
-  let replayAttemptsDetected = 0;
-
-  for (const decoratedSig of signatures) {
-    // hint is the last 4 bytes of the public key — use it to narrow candidates
-    const hint = decoratedSig.hint();
-    const sigBytes = decoratedSig.signature();
-
-    for (const [publicKey, weight] of signerWeightMap) {
-      if (usedSigners.has(publicKey)) {
-        replayAttemptsDetected++;
-        continue; // Skip already used signers - replay attempt
-      }
-
-      // Quick hint check before expensive crypto
-      const keyPair = StellarSdk.Keypair.fromPublicKey(publicKey);
-      const keyHint = keyPair.signatureHint();
-
-      if (!hint.equals(keyHint)) continue;
-
-      // Full Ed25519 signature verification
-      try {
-        const isValid = keyPair.verify(txHashBytes, sigBytes);
-        if (isValid) {
-          totalWeight += weight;
-          validSignatureCount += 1;
-          usedSigners.add(publicKey);
-          break; // move to next signature
-        }
-      } catch {
-        // Malformed signature bytes — skip
-      }
-    }
-  }
-
-  // Log replay attempts for security monitoring
-  if (replayAttemptsDetected > 0) {
-    signatureVerificationReplayAttempts.inc();
-    logger.warn({
-      txHash,
-      replayAttemptsDetected,
-      totalSignatures: signatures.length,
-    }, "verifyTransactionSignature: Signature replay attempts detected");
-  }
-
-  // ── Step 5: Check medium threshold ───────────────────────────────────────
-  // Payment operations require medium threshold authorisation.
-  // A threshold of 0 means any single valid signature suffices.
-  const effectiveThreshold = medThreshold > 0 ? medThreshold : 1;
-  const thresholdMet = totalWeight >= effectiveThreshold;
-
-  if (!thresholdMet) {
-    logger.warn({
-      txHash,
-      totalWeight,
-      requiredThreshold: effectiveThreshold,
-      signatureCount: signatures.length,
-      validSignatureCount,
-      isMultiSig,
-    }, "verifyTransactionSignature: Insufficient signing weight");
-    signatureVerificationTotal.inc({ result: "invalid" });
-    signatureVerificationDuration.observe({ result: "invalid" }, (Date.now() - startTime) / 1000);
-    return {
-      valid: false,
-      reason: `Insufficient signing weight: accumulated ${totalWeight}, required ${effectiveThreshold} (medium threshold)`,
-      isMultiSig,
-      signatureCount: signatures.length,
-      thresholdMet: false,
-    };
-  }
-
-  logger.info({
-    txHash,
-    totalWeight,
-    threshold: effectiveThreshold,
-    signatureCount: signatures.length,
-    isMultiSig,
-    durationMs: Date.now() - startTime,
-  }, "verifyTransactionSignature: Successfully verified");
-  signatureVerificationTotal.inc({ result: "valid" });
-  signatureVerificationDuration.observe({ result: "valid" }, (Date.now() - startTime) / 1000);
-
-  return {
-    valid: true,
-    reason: `Signature verification passed: weight ${totalWeight} >= threshold ${effectiveThreshold}`,
-    isMultiSig,
-    signatureCount: signatures.length,
-    thresholdMet: true,
-    isFeeBump,
-  };
-}
+// Export the horizon client for advanced use cases
+export { horizonClient, HorizonClient };
