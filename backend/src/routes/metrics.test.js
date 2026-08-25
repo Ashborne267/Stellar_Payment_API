@@ -32,6 +32,11 @@ vi.mock("../services/metricService.js", () => ({
 }));
 
 import createMetricsRouter from "./metrics.js";
+import {
+  dashboardMetricsRequestsTotal,
+  dashboardMetricsRequestDuration,
+  dashboardMetricsErrorsTotal,
+} from "../lib/metrics.js";
 
 function createApp({ dashboardMetricsRateLimit } = {}) {
   const app = express();
@@ -96,5 +101,71 @@ describe("Metrics (Admin Dashboard) routes", () => {
 
     expect(response.status).toBe(200);
     expect(mockGetVolumeOverTime).toHaveBeenCalledWith("merchant_123", "7D");
+  });
+});
+
+describe("Metrics (Admin Dashboard) granular request tracking", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRequireApiKeyAuth.mockReturnValue(mockAuthMiddleware);
+    dashboardMetricsRequestsTotal.reset();
+    dashboardMetricsRequestDuration.reset();
+    dashboardMetricsErrorsTotal.reset();
+  });
+
+  it("records a request count and latency observation for a successful call", async () => {
+    mockGetRevenueByAsset.mockResolvedValue({ revenue: [] });
+
+    const app = createApp({ dashboardMetricsRateLimit: (_req, _res, next) => next() });
+    await request(app).get("/api/metrics/revenue");
+
+    const requests = await dashboardMetricsRequestsTotal.get();
+    expect(requests.values).toContainEqual(
+      expect.objectContaining({
+        labels: { endpoint: "revenue", status_code: "200" },
+        value: 1,
+      }),
+    );
+
+    const duration = await dashboardMetricsRequestDuration.get();
+    const revenueDuration = duration.values.find(
+      (v) => v.labels.endpoint === "revenue" && v.metricName?.endsWith("_count"),
+    );
+    expect(revenueDuration?.value).toBe(1);
+  });
+
+  it("records an error count and a 500 request count when the service throws", async () => {
+    mockGetMonthlySummary.mockRejectedValue(new Error("db unavailable"));
+
+    const app = createApp({ dashboardMetricsRateLimit: (_req, _res, next) => next() });
+    const response = await request(app).get("/api/metrics/summary");
+
+    expect(response.status).toBe(500);
+
+    const errors = await dashboardMetricsErrorsTotal.get();
+    expect(errors.values).toContainEqual(
+      expect.objectContaining({
+        labels: { endpoint: "summary", error_type: "internal" },
+        value: 1,
+      }),
+    );
+
+    const requests = await dashboardMetricsRequestsTotal.get();
+    expect(requests.values).toContainEqual(
+      expect.objectContaining({
+        labels: { endpoint: "summary", status_code: "500" },
+        value: 1,
+      }),
+    );
+  });
+
+  it("does not record dashboard metrics when the rate limiter rejects the request first", async () => {
+    const rateLimited = (_req, res) => res.status(429).json({ error: "rate limited" });
+    const app = createApp({ dashboardMetricsRateLimit: rateLimited });
+
+    await request(app).get("/api/metrics/summary");
+
+    const requests = await dashboardMetricsRequestsTotal.get();
+    expect(requests.values).toHaveLength(0);
   });
 });
