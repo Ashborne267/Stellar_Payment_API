@@ -370,6 +370,46 @@ export const oracleCircuitBreakerTripsTotal = new client.Counter({
 });
 
 /**
+ * Admin Dashboard Service Metrics (granular per-endpoint request tracking)
+ *
+ * Labeled by `endpoint` (summary/revenue/volume) rather than merchant_id to
+ * keep Prometheus label cardinality bounded - per-merchant breakdowns belong
+ * in the business-facing responses these endpoints already return, not in
+ * the internal request/latency series.
+ */
+
+export const dashboardMetricsRequestsTotal = new client.Counter({
+  name: "dashboard_metrics_requests_total",
+  help: "Total number of requests to Admin Dashboard Service endpoints",
+  labelNames: ["endpoint", "status_code"],
+});
+
+export const dashboardMetricsRequestDuration = new client.Histogram({
+  name: "dashboard_metrics_request_duration_seconds",
+  help: "Time taken to serve Admin Dashboard Service endpoint requests",
+  labelNames: ["endpoint"],
+  buckets: [0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+});
+
+export const dashboardMetricsErrorsTotal = new client.Counter({
+  name: "dashboard_metrics_errors_total",
+  help: "Total number of errors from Admin Dashboard Service endpoints",
+  labelNames: ["endpoint", "error_type"],
+});
+
+export const dashboardMetricsCacheHitTotal = new client.Counter({
+  name: "dashboard_metrics_cache_hit_total",
+  help: "Total number of Admin Dashboard Service cache hits",
+  labelNames: ["endpoint"],
+});
+
+export const dashboardMetricsCacheMissTotal = new client.Counter({
+  name: "dashboard_metrics_cache_miss_total",
+  help: "Total number of Admin Dashboard Service cache misses",
+  labelNames: ["endpoint"],
+});
+
+/**
  * Webhook Event Dispatcher Cache Metrics (Issue #1100)
  */
 
@@ -697,6 +737,11 @@ register.registerMetric(oracleFetchDuration);
 register.registerMetric(oracleFetchErrorsTotal);
 register.registerMetric(oracleStaleDataServedTotal);
 register.registerMetric(oracleCircuitBreakerTripsTotal);
+register.registerMetric(dashboardMetricsRequestsTotal);
+register.registerMetric(dashboardMetricsRequestDuration);
+register.registerMetric(dashboardMetricsErrorsTotal);
+register.registerMetric(dashboardMetricsCacheHitTotal);
+register.registerMetric(dashboardMetricsCacheMissTotal);
 register.registerMetric(webhookEventCacheHitTotal);
 register.registerMetric(webhookEventCacheMissTotal);
 register.registerMetric(webhookEventCacheSize);
