@@ -369,6 +369,94 @@ export const oracleCircuitBreakerTripsTotal = new client.Counter({
   labelNames: ["provider"],
 });
 
+/**
+ * Webhook Event Dispatcher Cache Metrics (Issue #1100)
+ */
+
+export const webhookEventCacheHitTotal = new client.Counter({
+  name: "webhook_event_cache_hit_total",
+  help: "Total number of webhook event cache hits",
+  labelNames: ["event_type"],
+});
+
+export const webhookEventCacheMissTotal = new client.Counter({
+  name: "webhook_event_cache_miss_total",
+  help: "Total number of webhook event cache misses",
+  labelNames: ["event_type"],
+});
+
+export const webhookEventCacheSize = new client.Gauge({
+  name: "webhook_event_cache_size",
+  help: "Current number of entries in the webhook event payload cache",
+});
+
+export const webhookEventDeduplicationCacheSize = new client.Gauge({
+  name: "webhook_event_deduplication_cache_size",
+  help: "Current number of entries in the webhook event deduplication cache",
+});
+
+export const webhookEventDeliveryAttemptsCached = new client.Counter({
+  name: "webhook_event_delivery_attempts_cached_total",
+  help: "Total number of cached webhook delivery attempts",
+  labelNames: ["action"], // deduplicated, success
+});
+
+/**
+ * Fraud Detection Engine Metrics (Issue #1098)
+ */
+
+export const fraudDetectionPaymentsAnalyzed = new client.Counter({
+  name: "fraud_detection_payments_analyzed_total",
+  help: "Total number of payments analyzed by fraud detection engine",
+});
+
+export const fraudDetectionRiskScore = new client.Histogram({
+  name: "fraud_detection_risk_score",
+  help: "Distribution of fraud detection risk scores",
+  buckets: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+});
+
+export const fraudDetectionAnomaliesDetected = new client.Counter({
+  name: "fraud_detection_anomalies_detected_total",
+  help: "Total number of anomalies detected in payment patterns",
+  labelNames: ["count"],
+});
+
+export const fraudDetectionBlockedPayments = new client.Counter({
+  name: "fraud_detection_blocked_payments_total",
+  help: "Total number of payments blocked by fraud detection",
+  labelNames: ["reason"],
+});
+
+export const fraudDetectionHighRiskDetected = new client.Counter({
+  name: "fraud_detection_high_risk_detected_total",
+  help: "Total number of high-risk payments detected",
+  labelNames: ["level"],
+});
+
+export const fraudDetectionVelocityExceeded = new client.Counter({
+  name: "fraud_detection_velocity_exceeded_total",
+  help: "Total number of velocity-based anomalies detected",
+  labelNames: ["pattern"],
+});
+
+export const fraudDetectionGeographicAnomaly = new client.Counter({
+  name: "fraud_detection_geographic_anomaly_total",
+  help: "Total number of geographic pattern anomalies detected",
+  labelNames: ["pattern"],
+});
+
+export const fraudDetectionMetadataAnomalies = new client.Counter({
+  name: "fraud_detection_metadata_anomalies_total",
+  help: "Total number of metadata-based anomalies detected",
+  labelNames: ["type"],
+});
+
+export const fraudDetectionCacheSize = new client.Gauge({
+  name: "fraud_detection_cache_size",
+  help: "Current number of entries in the fraud detection risk score cache",
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -422,5 +510,19 @@ register.registerMetric(oracleFetchDuration);
 register.registerMetric(oracleFetchErrorsTotal);
 register.registerMetric(oracleStaleDataServedTotal);
 register.registerMetric(oracleCircuitBreakerTripsTotal);
+register.registerMetric(webhookEventCacheHitTotal);
+register.registerMetric(webhookEventCacheMissTotal);
+register.registerMetric(webhookEventCacheSize);
+register.registerMetric(webhookEventDeduplicationCacheSize);
+register.registerMetric(webhookEventDeliveryAttemptsCached);
+register.registerMetric(fraudDetectionPaymentsAnalyzed);
+register.registerMetric(fraudDetectionRiskScore);
+register.registerMetric(fraudDetectionAnomaliesDetected);
+register.registerMetric(fraudDetectionBlockedPayments);
+register.registerMetric(fraudDetectionHighRiskDetected);
+register.registerMetric(fraudDetectionVelocityExceeded);
+register.registerMetric(fraudDetectionGeographicAnomaly);
+register.registerMetric(fraudDetectionMetadataAnomalies);
+register.registerMetric(fraudDetectionCacheSize);
 
 export { register };
