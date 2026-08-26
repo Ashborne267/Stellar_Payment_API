@@ -186,6 +186,45 @@ export const ledgerMonitorRateLimiterWaitSeconds = new client.Histogram({
   buckets: [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
 });
 
+export const ledgerMonitorValidationFailures = new client.Counter({
+  name: "ledger_monitor_validation_failures_total",
+  help: "Total number of payment records that failed security validation",
+  labelNames: ["reason"], // missing_id, bad_recipient, bad_amount, bad_asset, bad_issuer, bad_memo, future_date
+});
+
+export const ledgerMonitorAnomaliesDetected = new client.Counter({
+  name: "ledger_monitor_anomalies_detected_total",
+  help: "Total number of anomalous patterns detected in payment records",
+  labelNames: ["type"], // large_amount, memo_control_chars, memo_sql_chars, stale_payment, metadata_unknown_keys
+});
+
+export const ledgerMonitorMerchantCacheHits = new client.Counter({
+  name: "ledger_monitor_merchant_cache_hits_total",
+  help: "Total number of merchant config cache hits during ledger monitor cycles",
+});
+
+export const ledgerMonitorMerchantCacheMisses = new client.Counter({
+  name: "ledger_monitor_merchant_cache_misses_total",
+  help: "Total number of merchant config cache misses during ledger monitor cycles",
+});
+
+export const ledgerMonitorMerchantCacheSize = new client.Gauge({
+  name: "ledger_monitor_merchant_cache_size",
+  help: "Current number of entries in the ledger monitor merchant config cache",
+});
+
+export const ledgerMonitorSignatureVerifications = new client.Counter({
+  name: "ledger_monitor_signature_verifications_total",
+  help: "Total number of transaction signature verifications performed by ledger monitor",
+  labelNames: ["result"], // passed, failed, error
+});
+
+export const ledgerMonitorHorizonOperations = new client.Counter({
+  name: "ledger_monitor_horizon_operations_total",
+  help: "Total number of Horizon API operations performed by ledger monitor",
+  labelNames: ["operation", "result"], // operation: findMatch, findAny; result: found, not_found, error
+});
+
 /**
  * Rate Limiting Metrics
  */
@@ -722,6 +761,13 @@ register.registerMetric(ledgerMonitorPaymentsChecked);
 register.registerMetric(ledgerMonitorCircuitBreakerTrips);
 register.registerMetric(ledgerMonitorBatchSize);
 register.registerMetric(ledgerMonitorRateLimiterWaitSeconds);
+register.registerMetric(ledgerMonitorValidationFailures);
+register.registerMetric(ledgerMonitorAnomaliesDetected);
+register.registerMetric(ledgerMonitorMerchantCacheHits);
+register.registerMetric(ledgerMonitorMerchantCacheMisses);
+register.registerMetric(ledgerMonitorMerchantCacheSize);
+register.registerMetric(ledgerMonitorSignatureVerifications);
+register.registerMetric(ledgerMonitorHorizonOperations);
 register.registerMetric(rateLimitExceededTotal);
 register.registerMetric(rateLimitRequestsTotal);
 register.registerMetric(queryCacheHitTotal);

@@ -54,6 +54,13 @@ import {
   ledgerMonitorCircuitBreakerTrips,
   ledgerMonitorBatchSize,
   ledgerMonitorRateLimiterWaitSeconds,
+  ledgerMonitorValidationFailures,
+  ledgerMonitorAnomaliesDetected,
+  ledgerMonitorMerchantCacheHits,
+  ledgerMonitorMerchantCacheMisses,
+  ledgerMonitorMerchantCacheSize,
+  ledgerMonitorSignatureVerifications,
+  ledgerMonitorHorizonOperations,
   rateLimitRequestsTotal,
   rateLimitExceededTotal,
 } from "./metrics.js";
@@ -73,14 +80,19 @@ class MerchantConfigCache {
 
   get(merchantId) {
     const entry = this.cache.get(merchantId);
-    if (!entry) return null;
+    if (!entry) {
+      ledgerMonitorMerchantCacheMisses.inc();
+      return null;
+    }
     if (Date.now() - entry.insertedAt > this.ttlMs) {
       this.cache.delete(merchantId);
+      ledgerMonitorMerchantCacheMisses.inc();
       return null;
     }
     // LRU touch
     this.cache.delete(merchantId);
     this.cache.set(merchantId, entry);
+    ledgerMonitorMerchantCacheHits.inc();
     return entry.data;
   }
 
@@ -93,6 +105,7 @@ class MerchantConfigCache {
       this.cache.delete(oldest);
     }
     this.cache.set(merchantId, { data, insertedAt: Date.now() });
+    ledgerMonitorMerchantCacheSize.set(this.cache.size);
   }
 
   invalidate(merchantId) {
@@ -370,11 +383,11 @@ async function pollPendingPayments() {
     // Pre-load every merchant notification config for this batch in a single
     // query, replacing the previous N+1 pattern (one merchants lookup per
     // confirmed payment). Seeds the per-cycle cache consumed by checkPayment.
-    const merchantConfigCache = await preloadMerchantConfigs(pending);
+    const cycleCache = await preloadMerchantConfigs(pending);
     const results = await Promise.allSettled(
       Array.from(groups.values()).map(async (group) => {
         for (const p of group) {
-          await checkPayment(p, { merchantConfigCache });
+          await checkPayment(p, { merchantConfigCache: cycleCache });
         }
       })
     );
@@ -408,6 +421,7 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
     // Guard: full security validation on the DB record before touching Horizon
     const validation = validatePaymentRecord(payment);
     if (!validation.valid) {
+      ledgerMonitorValidationFailures.inc({ reason: deriveValidationReasonTag(validation.reason) });
       logger.warn(
         { paymentId: payment?.id, reason: validation.reason },
         "Horizon poller: payment record failed security validation — skipping",
@@ -416,8 +430,9 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
       return;
     }
 
-    // Emit audit event for any anomalous field values
+    // Emit audit event for any anomalous field values and track per-type counts
     auditPaymentAnomaly(payment);
+    recordAnomalyMetrics(payment);
 
     let match;
     try {
@@ -769,6 +784,7 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
       { paymentId, txHash, operation: "verifyTransactionSignature" },
     );
   } catch (sigErr) {
+    ledgerMonitorSignatureVerifications.inc({ result: "error" });
     logger.warn(
       { err: sigErr, paymentId, txHash },
       "Horizon poller: unexpected error during signature verification — skipping payment",
@@ -777,6 +793,7 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
   }
 
   if (!sigResult?.valid) {
+    ledgerMonitorSignatureVerifications.inc({ result: "failed" });
     logger.warn(
       {
         paymentId,
@@ -791,6 +808,7 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
     return false;
   }
 
+  ledgerMonitorSignatureVerifications.inc({ result: "passed" });
   logger.debug(
     {
       paymentId,
@@ -966,4 +984,58 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
   cache.set(merchantId, result);
   merchantConfigCache.set(merchantId, result);
   return result;
+}
+
+/**
+ * Derive a short, label-safe tag from a validation failure reason string.
+ * Keeps Prometheus label cardinality bounded to a fixed set.
+ */
+function deriveValidationReasonTag(reason) {
+  if (!reason) return "unknown";
+  const r = reason.toLowerCase();
+  if (r.includes("recipient")) return "bad_recipient";
+  if (r.includes("amount")) return "bad_amount";
+  if (r.includes("issuer")) return "bad_issuer";
+  if (r.includes("asset")) return "bad_asset";
+  if (r.includes("memo")) return "bad_memo";
+  if (r.includes("future") || r.includes("created_at")) return "bad_date";
+  if (r.includes("id")) return "missing_id";
+  return "other";
+}
+
+/**
+ * Emit per-type anomaly metrics for a payment record.
+ * Mirrors the anomaly detection logic in auditPaymentAnomaly without
+ * duplicating the logger.warn calls — only the metric increments live here.
+ */
+function recordAnomalyMetrics(payment) {
+  const amount = Number(payment.amount);
+  if (amount > 100_000) {
+    ledgerMonitorAnomaliesDetected.inc({ type: "large_amount" });
+  }
+  if (typeof payment.memo === "string") {
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payment.memo)) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "memo_control_chars" });
+    }
+    if (payment.memo.includes("'") || payment.memo.includes('"') || payment.memo.includes("--")) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "memo_sql_chars" });
+    }
+  }
+  if (payment.created_at) {
+    const ageHours = (Date.now() - Date.parse(payment.created_at)) / 3_600_000;
+    if (ageHours > 20) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "stale_payment" });
+    }
+  }
+  if (payment.metadata && typeof payment.metadata === "object") {
+    const METADATA_ALLOWLIST = new Set([
+      "order_id", "customer_id", "reference", "invoice_id", "external_id",
+      "failure_reason", "expected_amount", "received_amount", "shortfall",
+      "excess", "overpayment", "note",
+    ]);
+    const unknownKeys = Object.keys(payment.metadata).filter((k) => !METADATA_ALLOWLIST.has(k));
+    if (unknownKeys.length > 0) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "metadata_unknown_keys" });
+    }
+  }
 }
