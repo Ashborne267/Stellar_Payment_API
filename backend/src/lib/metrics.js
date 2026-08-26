@@ -144,6 +144,16 @@ export const txSignatureCacheSize = new client.Gauge({
   help: "Current number of entries in the transaction signer replay cache",
 });
 
+export const txSignatureCacheHits = new client.Counter({
+  name: "tx_signature_cache_hits_total",
+  help: "Total number of verification cache hits",
+});
+
+export const txSignatureCacheMisses = new client.Counter({
+  name: "tx_signature_cache_misses_total",
+  help: "Total number of verification cache misses",
+});
+
 /**
  * Ledger Monitor Metrics
  */
@@ -705,6 +715,8 @@ register.registerMetric(txSignatureVerificationErrors);
 register.registerMetric(txSignatureReplayAttempts);
 register.registerMetric(txSignatureValidationFailures);
 register.registerMetric(txSignatureCacheSize);
+register.registerMetric(txSignatureCacheHits);
+register.registerMetric(txSignatureCacheMisses);
 register.registerMetric(ledgerMonitorCycleDuration);
 register.registerMetric(ledgerMonitorPaymentsChecked);
 register.registerMetric(ledgerMonitorCircuitBreakerTrips);
