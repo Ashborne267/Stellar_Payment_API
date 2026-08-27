@@ -14,6 +14,17 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  auditLogWritesTotal,
+  auditLogWriteDuration,
+  auditLogFallbackWritesTotal,
+  auditLogCircuitBreakerTrips,
+  auditLogCircuitBreakerState,
+  auditLogRateLimitRejectionsTotal,
+  auditLogIntegrityVerificationsTotal,
+} from "../lib/metrics.js";
+
+const AUDIT_SOURCE = "profile_change";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AUDIT_FALLBACK_LOG_PATH = process.env.AUDIT_FALLBACK_LOG_PATH || path.join(__dirname, "../../logs/audit_fallback.log");
@@ -33,9 +44,17 @@ const svcCircuitBreaker = new AuditCircuitBreaker({
   resetTimeoutMs: SVC_CIRCUIT_RESET_MS,
   label: "audit-service",
   onClose: () => {
+    auditLogCircuitBreakerState.set({ source: AUDIT_SOURCE }, 0);
     replayFallbackLogs(AUDIT_FALLBACK_LOG_PATH).catch((err) => {
       console.error("[Audit Replay] Fallback log replay failed:", err.message);
     });
+  },
+  onOpen: () => {
+    auditLogCircuitBreakerTrips.inc({ source: AUDIT_SOURCE });
+    auditLogCircuitBreakerState.set({ source: AUDIT_SOURCE }, 1);
+  },
+  onHalfOpen: () => {
+    auditLogCircuitBreakerState.set({ source: AUDIT_SOURCE }, 2);
   },
 });
 
@@ -68,6 +87,7 @@ function writeFallbackLog(payload, error) {
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.appendFileSync(AUDIT_FALLBACK_LOG_PATH, entry);
+    auditLogFallbackWritesTotal.inc({ source: AUDIT_SOURCE });
   } catch (fallbackErr) {
     console.error("Failed to write audit fallback log:", fallbackErr.message);
   }
@@ -149,6 +169,7 @@ export const auditService = {
     // Verify cryptographic integrity of each row before returning
     const logs = result.rows.map(({ total_count: _tc, ...row }) => {
       const integrity = verifyRowIntegrity(row);
+      auditLogIntegrityVerificationsTotal.inc({ result: integrity.status });
       return {
         id: row.id,
         action: row.action,
@@ -193,6 +214,7 @@ export const auditService = {
     });
     const rateLimitResult = consumeAuditLogRateLimit(rateLimitKey);
     if (!rateLimitResult.allowed) {
+      auditLogRateLimitRejectionsTotal.inc({ source: AUDIT_SOURCE });
       return;
     }
 
@@ -209,7 +231,13 @@ export const auditService = {
     const payloadHash = hashAuditPayload(payload);
     const signature = signAuditPayload(payload);
 
+    const writeStart = process.hrtime.bigint();
     const result = await insertAuditLog({ payload, payloadHash, signature });
+    const durationSeconds = Number(process.hrtime.bigint() - writeStart) / 1e9;
+
+    const resultTag = result.success ? "success" : result.circuitOpen ? "circuit_open" : "failure";
+    auditLogWritesTotal.inc({ source: AUDIT_SOURCE, result: resultTag });
+    auditLogWriteDuration.observe({ source: AUDIT_SOURCE, result: resultTag }, durationSeconds);
 
     if (!result.success) {
       writeFallbackLog(payload, result.error);

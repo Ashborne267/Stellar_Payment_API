@@ -24,6 +24,16 @@ import {
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  auditLogWritesTotal,
+  auditLogWriteDuration,
+  auditLogFallbackWritesTotal,
+  auditLogCircuitBreakerTrips,
+  auditLogCircuitBreakerState,
+  auditLogRateLimitRejectionsTotal,
+} from "./metrics.js";
+
+const AUDIT_SOURCE = "login_attempt";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AUDIT_FALLBACK_LOG_PATH = process.env.AUDIT_FALLBACK_LOG_PATH || path.join(__dirname, "../../logs/audit_fallback.log");
@@ -44,9 +54,17 @@ const auditCircuitBreaker = new AuditCircuitBreaker({
   resetTimeoutMs: CIRCUIT_RESET_MS,
   label: "audit-helper",
   onClose: () => {
+    auditLogCircuitBreakerState.set({ source: AUDIT_SOURCE }, 0);
     replayFallbackLogs(AUDIT_FALLBACK_LOG_PATH).catch((err) => {
       console.error("[Audit Replay] Fallback log replay failed:", err.message);
     });
+  },
+  onOpen: () => {
+    auditLogCircuitBreakerTrips.inc({ source: AUDIT_SOURCE });
+    auditLogCircuitBreakerState.set({ source: AUDIT_SOURCE }, 1);
+  },
+  onHalfOpen: () => {
+    auditLogCircuitBreakerState.set({ source: AUDIT_SOURCE }, 2);
   },
 });
 
@@ -88,6 +106,7 @@ function writeFallbackLog(payload, error) {
       fs.mkdirSync(dir, { recursive: true });
     }
     fs.appendFileSync(AUDIT_FALLBACK_LOG_PATH, entry);
+    auditLogFallbackWritesTotal.inc({ source: AUDIT_SOURCE });
   } catch (fallbackErr) {
     console.error("Failed to write audit fallback log:", fallbackErr.message);
   }
@@ -157,6 +176,7 @@ export async function logLoginAttempt({ merchantId, ipAddress, userAgent, status
   });
   const rateLimitResult = consumeAuditLogRateLimit(rateLimitKey);
   if (!rateLimitResult.allowed) {
+    auditLogRateLimitRejectionsTotal.inc({ source: AUDIT_SOURCE });
     return;
   }
 
@@ -172,7 +192,13 @@ export async function logLoginAttempt({ merchantId, ipAddress, userAgent, status
   const payloadHash = hashAuditPayload(payload);
   const signature = signAuditPayload(payload);
 
+  const writeStart = process.hrtime.bigint();
   const result = await insertAuditLog({ payload, payloadHash, signature });
+  const durationSeconds = Number(process.hrtime.bigint() - writeStart) / 1e9;
+
+  const resultTag = result.success ? "success" : result.circuitOpen ? "circuit_open" : "failure";
+  auditLogWritesTotal.inc({ source: AUDIT_SOURCE, result: resultTag });
+  auditLogWriteDuration.observe({ source: AUDIT_SOURCE, result: resultTag }, durationSeconds);
 
   if (!result.success) {
     writeFallbackLog(payload, result.error);
