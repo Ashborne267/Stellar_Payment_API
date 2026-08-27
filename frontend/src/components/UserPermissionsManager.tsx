@@ -32,21 +32,23 @@ function PermissionRow({ permission, isPending, isReadOnly, onToggle }: Permissi
   const disabled = isReadOnly || isPending;
   return (
     <div
-      key={permission.id}
       className={[
-        "flex items-center justify-between border-b border-[#F5F5F5] py-3 last:border-0",
+        "flex items-center justify-between gap-3 border-b border-[#F5F5F5] py-3 last:border-0",
         "motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1",
       ].join(" ")}
     >
-      <div className="flex flex-col gap-0.5 flex-1 mr-4">
-        <span className="text-sm font-semibold text-[#0A0A0A]">{permission.name}</span>
-        <span className="text-xs text-[#6B6B6B]">{permission.description}</span>
+      <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+        <span className="text-sm font-semibold text-[#0A0A0A] truncate">{permission.name}</span>
+        <span id={`perm-desc-${permission.id}`} className="text-xs text-[#6B6B6B] break-words">{permission.description}</span>
       </div>
 
-      <label className="relative flex items-center cursor-pointer select-none">
+      <label className="relative flex shrink-0 items-center cursor-pointer select-none">
         <input
           type="checkbox"
+          role="switch"
           aria-label={permission.name}
+          aria-checked={permission.granted}
+          aria-describedby={`perm-desc-${permission.id}`}
           checked={permission.granted}
           disabled={disabled}
           onChange={() => onToggle(permission.id)}
@@ -101,7 +103,7 @@ function CategorySection({
         onClick={() => onToggleCategory(category)}
         aria-controls={`category-${category}`}
         aria-expanded={isExpanded}
-        className="w-full flex items-center justify-between px-5 py-3.5 bg-[#F9F9F9] hover:bg-[#F3F3F3] transition-colors"
+        className="w-full flex items-center justify-between px-3 py-3 sm:px-5 sm:py-3.5 bg-[#F9F9F9] hover:bg-[#F3F3F3] transition-colors"
       >
         <span className="text-xs font-bold uppercase tracking-widest text-[#0A0A0A]">
           {label}
@@ -125,7 +127,7 @@ function CategorySection({
           id={`category-${category}`}
           role="region"
           aria-label={label}
-          className="px-5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1"
+          className="px-3 sm:px-5 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1"
         >
           {items.map((p) => (
             <PermissionRow
@@ -200,7 +202,8 @@ export function UserPermissionsManager({
     <section
       role="region"
       aria-label={t("manager")}
-      aria-busy={pendingIds.size > 0}
+      aria-live="polite"
+      aria-atomic="false"
       className="flex flex-col gap-4"
     >
       {isReadOnly && (

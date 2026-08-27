@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { useNetworkStatusStore } from "@/lib/network-status-store";
 import { useNetworkMonitor } from "@/hooks/useNetworkMonitor";
@@ -32,30 +32,40 @@ const getStatusColor = (
   dot: string;
   bg: string;
   text: string;
+  badge: string;
+  border: string;
 } => {
   const colors: Record<
     string,
-    { dot: string; bg: string; text: string }
+    { dot: string; bg: string; text: string; badge: string; border: string }
   > = {
     online: {
       dot: "bg-green-500",
       bg: "bg-green-50",
       text: "text-green-700",
+      badge: "bg-green-100 text-green-800 border-green-200",
+      border: "border-green-200",
     },
     offline: {
       dot: "bg-red-500",
       bg: "bg-red-50",
       text: "text-red-700",
+      badge: "bg-red-100 text-red-800 border-red-200",
+      border: "border-red-200",
     },
     slow: {
       dot: "bg-yellow-500",
       bg: "bg-yellow-50",
       text: "text-yellow-700",
+      badge: "bg-yellow-100 text-yellow-800 border-yellow-200",
+      border: "border-yellow-200",
     },
     checking: {
       dot: "bg-gray-400",
       bg: "bg-gray-50",
       text: "text-gray-700",
+      badge: "bg-gray-100 text-gray-700 border-gray-200",
+      border: "border-gray-200",
     },
   };
 
@@ -105,7 +115,17 @@ export const NetworkStatusIndicator: React.FC<
   const t = useTranslations();
   const [isHovered, setIsHovered] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
-  const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Detect reduced-motion preference safely — avoids SSR/hydration mismatch
+  // when reading window.matchMedia directly at render time.
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReducedMotion(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setReducedMotion(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
   const { statusRegionRef, detailsRegionRef, refreshButtonRef, handleRefresh } =
     useNetworkMonitor({
@@ -128,13 +148,10 @@ export const NetworkStatusIndicator: React.FC<
   return (
     <div
       ref={statusRegionRef}
-      className={`w-full rounded-lg border border-gray-200 bg-white p-4 shadow-sm relative overflow-hidden transition-all duration-300 ${
-        isHovered && enableMicroInteractions ? 'bg-blue-50 scale-[1.02]' : ''
+      className={`w-full rounded-xl border bg-white p-4 shadow-sm relative overflow-hidden transition-all duration-300 ${colors.border} ${
+        isHovered && enableMicroInteractions ? "shadow-md scale-[1.01]" : ""
       } ${
-        isFocused && enableMicroInteractions ? 'ring-2 ring-blue-500' : ''
-      } ${
-        !reducedMotion && (status === 'offline' || status === 'slow') ? 'animate-flash-red' : 
-        !reducedMotion && status === 'online' ? 'animate-flash-green' : ''
+        isFocused && enableMicroInteractions ? "ring-2 ring-blue-500 ring-offset-1" : ""
       }`}
       role="region"
       aria-label={t("network.status")}
@@ -171,26 +188,21 @@ export const NetworkStatusIndicator: React.FC<
               )}
             </div>
 
-            {/* Enhanced status label */}
-            <div
-              key={status}
-              className="flex flex-col gap-1 transition-all duration-300"
-            >
+            {/* Status badge + latency */}
+            <div className="flex flex-col gap-1">
               <span
-                className={`text-sm font-medium ${colors.text} ${
-                  status === 'offline' && !reducedMotion ? 'animate-shake' : ''
-                }`}
+                className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors duration-300 ${colors.badge}`}
               >
                 {statusLabel}
               </span>
 
               {showDetails && latency !== null && (
                 <span
-                  className={`text-xs text-gray-500 transition-colors duration-300 ${getLatencyColor(latency)}`}
+                  className={`text-xs transition-colors duration-300 ${getLatencyColor(latency)}`}
                 >
                   {latency}ms
                   {connectionType && connectionType !== "unknown" && (
-                    <span className="ml-2">({connectionType})</span>
+                    <span className="ml-1 text-gray-400">· {connectionType}</span>
                   )}
                 </span>
               )}
@@ -202,11 +214,10 @@ export const NetworkStatusIndicator: React.FC<
             ref={refreshButtonRef}
             onClick={handleRefresh}
             className={`relative rounded-md p-1.5 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-200 ${
-              status === 'checking' ? 'animate-spin' : 'hover:scale-105 active:scale-95'
+              status !== 'checking' ? 'hover:scale-105 active:scale-95' : ''
             }`}
             aria-label={t("network.refresh")}
             aria-describedby={status === "checking" ? "refresh-status" : undefined}
-            aria-pressed={status === "checking"}
             aria-busy={status === "checking"}
             disabled={status === "checking"}
             onKeyDown={(e) => {
