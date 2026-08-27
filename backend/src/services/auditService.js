@@ -80,7 +80,7 @@ async function insertAuditLog({ payload, payloadHash, signature }) {
 
   for (let attempt = 0; attempt <= AUDIT_DB_RETRY_ATTEMPTS; attempt += 1) {
     try {
-      await optimizedWrite(
+      await pool.query(
         `INSERT INTO audit_logs (merchant_id, action, field_changed, old_value, new_value, ip_address, user_agent, payload_hash, signature)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
@@ -94,10 +94,6 @@ async function insertAuditLog({ payload, payloadHash, signature }) {
           payloadHash,
           signature,
         ],
-        {
-          label: "insert_audit_log",
-          merchantId: payload.merchant_id,
-        }
       );
       recordSvcSuccess();
       return { success: true };
