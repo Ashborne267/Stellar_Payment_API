@@ -151,7 +151,7 @@ function PermissionRow({
             </span>
           )}
         </div>
-        <p className="text-xs sm:text-sm text-pluto-600 dark:text-pluto-400 leading-relaxed pr-2">
+        <p id={`perm-desc-${permission.id}`} className="text-xs sm:text-sm text-pluto-600 dark:text-pluto-400 leading-relaxed pr-2">
           {permission.description}
         </p>
         {permission.lastModified && (
@@ -167,7 +167,9 @@ function PermissionRow({
         <label className="relative inline-flex items-center cursor-pointer select-none group/switch">
           <input
             type="checkbox"
+            role="switch"
             aria-label={`Toggle ${permission.name}`}
+            aria-checked={permission.granted}
             aria-describedby={`perm-desc-${permission.id}`}
             checked={permission.granted}
             disabled={disabled}
@@ -431,6 +433,8 @@ export function UserPermissionsManager({
     <section
       role="region"
       aria-label={t("manager")}
+      aria-live="polite"
+      aria-atomic="false"
       aria-busy={pendingIds.size > 0}
       className="flex flex-col gap-5 sm:gap-6 p-4 sm:p-6 bg-gradient-to-br from-pluto-50/50 to-white dark:from-pluto-900/10 dark:to-pluto-900/5 rounded-2xl border-2 border-pluto-100 dark:border-pluto-800"
     >
