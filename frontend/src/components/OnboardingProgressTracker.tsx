@@ -327,8 +327,10 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
             />
           </div>
 
-          <p className="mt-2 flex items-center gap-1.5 text-xs text-pluto-500 dark:text-pluto-400" aria-hidden="true">
-            {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
+          <div className="mt-2 flex items-center gap-1.5 text-xs">
+            <span className="text-pluto-500 dark:text-pluto-400" aria-hidden="true">
+              {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
+            </span>
             {isComplete && (
               <span className="inline-flex items-center gap-1 font-semibold text-pluto-600 dark:text-pluto-300">
                 <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
@@ -337,7 +339,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                 {i18n.allCompleted}
               </span>
             )}
-          </p>
+          </div>
         </div>
 
         {/* ── Steps list ───────────────────────────────────────────────────── */}
@@ -380,7 +382,10 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   {/* Step indicator button */}
                   <button
                     type="button"
-                    onClick={() => handleStepClick(step.id)}
+                    onClick={() => {
+                      if (isPending) return;
+                      handleStepClick(step.id);
+                    }}
                     className={`
                       relative flex-shrink-0
                       ${compact ? "h-8 w-8" : "h-10 w-10"}
@@ -389,10 +394,10 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       focus:outline-none focus-visible:ring-2
                       focus-visible:ring-pluto-400 focus-visible:ring-offset-2
                       focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-950
+                      ${isPending ? "cursor-not-allowed opacity-70" : ""}
                       ${indicatorColorClass}
                     `}
                     aria-label={i18n.stepAriaLabel(index + 1, step.title, step.completed, step.required)}
-                    aria-pressed={isCurrent}
                     aria-current={isCurrent ? "step" : undefined}
                     aria-setsize={sortedSteps.length}
                     aria-posinset={index + 1}
@@ -400,7 +405,6 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                     aria-describedby={stepDescId}
                     aria-busy={isPending}
                     aria-disabled={isPending || undefined}
-                    disabled={isPending}
                   >
                     <StepIcon
                       completed={step.completed}
