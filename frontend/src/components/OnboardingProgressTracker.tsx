@@ -303,21 +303,21 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
         {/* ── Header ──────────────────────────────────────────────────────── */}
         <div className="mb-6">
           <div className="flex items-baseline justify-between gap-2">
-            <h2 className={`font-semibold tracking-tight text-pluto-900 dark:text-pluto-50 ${compact ? "text-base" : "text-lg"}`}>
+            <h2 className={`font-bold tracking-tight text-pluto-900 dark:text-pluto-50 ${compact ? "text-base" : "text-lg"}`}>
               {i18n.title}
             </h2>
-            <span className="shrink-0 tabular-nums text-sm font-semibold text-pluto-600 dark:text-pluto-300" aria-hidden="true">
+            <span className="shrink-0 tabular-nums text-sm font-bold text-pluto-600 dark:text-pluto-300" aria-hidden="true">
               {i18n.percentCompleteLabel(progressPercent)}
             </span>
           </div>
 
-          <p className={`mt-1.5 leading-relaxed text-pluto-500 dark:text-pluto-400 ${compact ? "text-xs" : "text-sm"}`}>
+          <p className={`mt-1.5 text-[#6B6B6B] dark:text-pluto-400 ${compact ? "text-xs" : "text-sm"}`}>
             {i18n.subtitle}
           </p>
 
           {/* CSS-animated progress bar — no framer-motion */}
           <div
-            className="mt-4 h-2 overflow-hidden rounded-full bg-pluto-100 dark:bg-pluto-800"
+            className="mt-4 h-2.5 overflow-hidden rounded-full bg-pluto-100 dark:bg-pluto-800"
             role="progressbar"
             aria-valuenow={progressPercent}
             aria-valuemin={0}
@@ -326,18 +326,14 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
             aria-describedby={progressSummaryId}
           >
             <div
-              className={`h-full rounded-full bg-gradient-to-r from-pluto-400 via-pluto-500 to-pluto-600 dark:from-pluto-500 dark:via-pluto-400 dark:to-pluto-300 origin-left transition-[width] duration-500 ease-out ${
-                prefersReducedMotion ? "" : ""
-              }`}
+              className={`h-full rounded-full bg-gradient-to-r from-pluto-400 via-pluto-500 to-pluto-600 dark:from-pluto-500 dark:via-pluto-400 dark:to-pluto-300 origin-left transition-[width] duration-500 ease-out`}
               style={{ width: `${progressPercent}%` }}
               data-testid="progress-bar-fill"
             />
           </div>
 
-          <div className="mt-2 flex items-center gap-1.5 text-xs">
-            <span className="text-pluto-500 dark:text-pluto-400" aria-hidden="true">
-              {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
-            </span>
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-[#6B6B6B] dark:text-pluto-400" aria-hidden="true">
+            {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
             {isComplete && (
               <span className="inline-flex items-center gap-1 font-semibold text-pluto-600 dark:text-pluto-300">
                 <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
@@ -351,7 +347,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
 
         {/* ── Steps list ───────────────────────────────────────────────────── */}
         <MotionOl
-          className={orientation === "horizontal" ? "flex flex-col gap-3 sm:flex-row sm:gap-3" : "flex flex-col gap-1.5"}
+          className={orientation === "horizontal" ? "flex flex-col gap-3 md:flex-row md:gap-2" : "flex flex-col gap-1"}
           role="list"
           aria-label={i18n.stepsList}
           aria-orientation={orientation}
@@ -379,31 +375,28 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   variants={stepVariants}
                   className={`
                     group relative rounded-2xl border border-transparent
-                    px-4 py-3 transition-colors duration-200
+                    px-3 py-3 transition-colors duration-200
                     hover:border-pluto-100 hover:bg-white/80
                     dark:hover:border-pluto-800/60 dark:hover:bg-pluto-900/50
                     focus-within:border-pluto-200 dark:focus-within:border-pluto-700
-                    ${orientation === "horizontal" ? "flex flex-1 flex-col gap-2.5" : "flex flex-row gap-3.5"}
+                    ${orientation === "horizontal" ? "flex flex-1 flex-col gap-2 md:items-center md:text-center" : "flex flex-row gap-3"}
                   `}
                 >
                   {/* Step indicator button */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (isPending) return;
-                      handleStepClick(step.id);
-                    }}
-                    className={`
-                      relative flex-shrink-0
-                      ${compact ? "h-8 w-8" : "h-10 w-10"}
-                      rounded-full border-2 font-semibold
-                      transition-all duration-200
-                      focus:outline-none focus-visible:ring-2
-                      focus-visible:ring-pluto-400 focus-visible:ring-offset-2
-                      focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-950
-                      ${isPending ? "cursor-not-allowed opacity-70" : "hover:scale-105 active:scale-95"}
-                      ${indicatorColorClass}
-                    `}
+                    <button
+                      type="button"
+                      onClick={() => handleStepClick(step.id)}
+                      className={`
+                        relative flex-shrink-0
+                        ${compact ? "h-8 w-8" : "h-10 w-10"}
+                        rounded-full border-2 font-semibold
+                        transition-all duration-200
+                        focus:outline-none focus-visible:ring-2
+                        focus-visible:ring-pluto-400 focus-visible:ring-offset-2
+                        focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-950
+                        ${orientation === "horizontal" ? "mx-auto md:mx-0" : ""}
+                        ${indicatorColorClass}
+                      `}
                     aria-label={i18n.stepAriaLabel(index + 1, step.title, step.completed, step.required)}
                     aria-current={isCurrent ? "step" : undefined}
                     aria-setsize={sortedSteps.length}
@@ -426,6 +419,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
 
                   {/* Step text */}
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <div className={`flex min-w-0 flex-1 flex-col gap-1 ${orientation === "horizontal" ? "md:text-center" : ""}`}>
                     <h3
                       id={stepDescId}
                       className={`
@@ -448,14 +442,16 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       {step.description}
                     </p>
 
-                    <StatusBadge
-                      completed={step.completed}
-                      isCurrent={isCurrent}
-                      compact={compact}
-                      completedLabel={i18n.completed}
-                      inProgressLabel={i18n.inProgress}
-                      pendingLabel={i18n.pending}
-                    />
+                    <div className={orientation === "horizontal" ? "flex justify-center md:justify-center" : ""}>
+                      <StatusBadge
+                        completed={step.completed}
+                        isCurrent={isCurrent}
+                        compact={compact}
+                        completedLabel={i18n.completed}
+                        inProgressLabel={i18n.inProgress}
+                        pendingLabel={i18n.pending}
+                      />
+                    </div>
                   </div>
 
                   {/* Vertical connector */}
@@ -470,6 +466,13 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   {orientation === "horizontal" && index < sortedSteps.length - 1 && (
                     <div
                       className={`absolute right-[-0.75rem] hidden h-px w-3 bg-pluto-200 dark:bg-pluto-700 sm:block ${compact ? "top-[1.75rem]" : "top-[2rem]"}`}
+                      aria-hidden="true"
+                    />
+                  )}
+                  {/* Horizontal connector */}
+                  {orientation === "horizontal" && index < sortedSteps.length - 1 && (
+                    <div
+                      className={`hidden md:block absolute left-[calc(100%+4px)] top-1/2 -translate-y-1/2 ${compact ? "w-2 h-px" : "w-3 h-px"} bg-pluto-200 dark:bg-pluto-700`}
                       aria-hidden="true"
                     />
                   )}
@@ -510,6 +513,8 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                 <div>
                   <h4 className="font-semibold tracking-tight text-pluto-900 dark:text-pluto-50">{i18n.successTitle}</h4>
                   <p className="mt-1 text-sm leading-relaxed text-pluto-700 dark:text-pluto-300">{i18n.successMessage}</p>
+                  <h4 className="font-bold text-pluto-900 dark:text-pluto-50">{i18n.successTitle}</h4>
+                  <p className="mt-1 text-sm text-pluto-700 dark:text-pluto-300">{i18n.successMessage}</p>
                 </div>
               </div>
             </MotionDiv>
