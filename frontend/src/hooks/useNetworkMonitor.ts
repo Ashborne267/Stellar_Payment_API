@@ -179,8 +179,9 @@ export function useNetworkMonitor({
     checkStatus();
     setTimeout(() => {
       if (enableScreenReaderSupport && announcementsEnabled) {
-        const currentStatus = status === "checking" ? "completed" : status;
-        announce(`Network status check ${currentStatus}`, "polite");
+        // status can't be "checking" here — the early return above already
+        // guards against that for this captured value.
+        announce(`Network status check ${status}`, "polite");
       }
     }, 2000);
   }, [

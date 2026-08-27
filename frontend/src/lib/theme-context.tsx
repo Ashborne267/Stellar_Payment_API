@@ -1,12 +1,11 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode, useMemo } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, ReactNode } from "react";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
-/** Returns whether the OS currently prefers a dark color scheme. */
 function systemPrefersDark(): boolean {
   return (
     typeof globalThis !== "undefined" &&
@@ -15,14 +14,12 @@ function systemPrefersDark(): boolean {
   );
 }
 
-/** Resolves a {@link ThemeMode} to a concrete light/dark theme. */
 export function resolveTheme(mode: ThemeMode, forced?: ResolvedTheme): ResolvedTheme {
   if (forced) return forced;
   if (mode === "system") return systemPrefersDark() ? "dark" : "light";
   return mode;
 }
 
-/** Applies the resolved theme to the document root class and meta theme-color. */
 function applyThemeToDocument(resolved: ResolvedTheme): void {
   if (typeof globalThis === "undefined" || !globalThis.document) return;
   globalThis.document.documentElement.classList.remove("light", "dark");
@@ -46,6 +43,58 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
+// --- Reducer ---
+
+interface ThemeState {
+  theme: ThemeMode;
+  resolvedTheme: ResolvedTheme | undefined;
+  isMounted: boolean;
+  isLoading: boolean;
+  error: string | null;
+}
+
+type ThemeAction =
+  | { type: "MOUNT"; theme: ThemeMode; resolvedTheme: ResolvedTheme }
+  | { type: "SET_THEME"; theme: ThemeMode; resolvedTheme: ResolvedTheme }
+  | { type: "SET_RESOLVED"; resolvedTheme: ResolvedTheme }
+  | { type: "SET_ERROR"; error: string; theme: ThemeMode; resolvedTheme: ResolvedTheme | undefined }
+  | { type: "CLEAR_ERROR" };
+
+function themeReducer(state: ThemeState, action: ThemeAction): ThemeState {
+  switch (action.type) {
+    case "MOUNT":
+      return {
+        ...state,
+        isMounted: true,
+        isLoading: false,
+        theme: action.theme,
+        resolvedTheme: action.resolvedTheme,
+      };
+    case "SET_THEME":
+      return {
+        ...state,
+        theme: action.theme,
+        resolvedTheme: action.resolvedTheme,
+        error: null,
+      };
+    case "SET_RESOLVED":
+      return { ...state, resolvedTheme: action.resolvedTheme };
+    case "SET_ERROR":
+      return {
+        ...state,
+        error: action.error,
+        theme: action.theme,
+        resolvedTheme: action.resolvedTheme,
+      };
+    case "CLEAR_ERROR":
+      return { ...state, error: null };
+    default:
+      return state;
+  }
+}
+
+// --- Provider ---
+
 interface ThemeProviderProps {
   readonly children: ReactNode;
   readonly defaultTheme?: ThemeMode;
@@ -61,114 +110,125 @@ export function ThemeProvider({
   enableSystem = true,
   forcedTheme,
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<ThemeMode | undefined>(defaultTheme);
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme | undefined>(undefined);
-  const [isMounted, setIsMounted] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [state, dispatch] = useReducer(themeReducer, {
+    theme: defaultTheme,
+    resolvedTheme: undefined,
+    isMounted: false,
+    isLoading: true,
+    error: null,
+  });
+
+  // Ref so media query listener always reads the latest theme without stale closure
+  const themeRef = useRef<ThemeMode>(defaultTheme);
+  themeRef.current = state.theme;
+
+  const resolveThemeMode = useCallback(
+    (themeMode: ThemeMode): ResolvedTheme => {
+      if (forcedTheme) return forcedTheme;
+      if (themeMode !== "system") return themeMode;
+      return systemPrefersDark() ? "dark" : "light";
+    },
+    [forcedTheme]
+  );
+
+  const resolvedRef = useRef<ResolvedTheme | undefined>(state.resolvedTheme);
+  resolvedRef.current = state.resolvedTheme;
 
   const clearError = useCallback(() => {
-    setError(null);
+    dispatch({ type: "CLEAR_ERROR" });
   }, []);
 
   const setTheme = useCallback((newTheme: ThemeMode) => {
-    const previousTheme = theme;
-    const previousResolved = resolvedTheme;
+    const previousTheme = themeRef.current;
+    const previousResolved = resolvedRef.current;
+
+    const resolved = resolveThemeMode(newTheme);
+    dispatch({ type: "SET_THEME", theme: newTheme, resolvedTheme: resolved });
+    applyThemeToDocument(resolved);
 
     try {
-      setThemeState(newTheme);
-
       if (typeof globalThis !== "undefined" && globalThis.window) {
         globalThis.localStorage.setItem(storageKey, newTheme);
-
-        const resolved = resolveTheme(newTheme);
-        setResolvedTheme(resolved);
-        applyThemeToDocument(resolved);
       }
-
-      setError(null);
     } catch (err) {
-      // Revert optimistic update — restore the previous theme, the document
-      // class AND the meta theme-color so no part of the optimistic change
-      // lingers after a failed persist.
-      setThemeState(previousTheme !== undefined ? previousTheme : defaultTheme);
       if (previousResolved) {
-        setResolvedTheme(previousResolved);
-        if (typeof globalThis !== "undefined" && globalThis.window) {
-          applyThemeToDocument(previousResolved);
-          globalThis.document.documentElement.classList.remove("light", "dark");
-          globalThis.document.documentElement.classList.add(previousResolved);
-
-          const metaThemeColor = globalThis.document.querySelector('meta[name="theme-color"]');
-          if (metaThemeColor) {
-            metaThemeColor.setAttribute("content", previousResolved === "dark" ? "#0A0A0A" : "#FFFFFF");
-          }
-        }
+        applyThemeToDocument(previousResolved);
       }
-      
       const errorMessage = err instanceof Error ? err.message : "Failed to set theme";
-      setError(errorMessage);
+      dispatch({
+        type: "SET_ERROR",
+        error: errorMessage,
+        theme: previousTheme,
+        resolvedTheme: previousResolved,
+      });
       console.error("Theme setting error:", err);
     }
-  }, [storageKey, theme, resolvedTheme, defaultTheme]);
+  }, [resolveThemeMode, storageKey]);
 
   const toggleTheme = useCallback(() => {
     const themes: ThemeMode[] = ["light", "dark", "system"];
-    const currentIndex = theme ? themes.indexOf(theme) : 0;
+    const currentIndex = themeRef.current ? themes.indexOf(themeRef.current) : 0;
     const nextIndex = (currentIndex + 1) % themes.length;
     setTheme(themes[nextIndex]);
-  }, [theme, setTheme]);
+  }, [setTheme]);
 
+  const applyTheme = useCallback((mode: ThemeMode) => {
+    try {
+      const resolved = resolveThemeMode(mode);
+      dispatch({ type: "SET_RESOLVED", resolvedTheme: resolved });
+      applyThemeToDocument(resolved);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to apply theme";
+      dispatch({
+        type: "SET_ERROR",
+        error: errorMessage,
+        theme: themeRef.current,
+        resolvedTheme: resolvedRef.current,
+      });
+      console.error("Theme apply error:", err);
+    }
+  }, [resolveThemeMode]);
+
+  // Mount effect — runs once to read stored preference and attach system listener
   useEffect(() => {
-    setIsMounted(true);
-    
-    const storedTheme = typeof globalThis !== "undefined" && globalThis.localStorage 
+    const storedTheme = typeof globalThis !== "undefined" && globalThis.localStorage
       ? (globalThis.localStorage.getItem(storageKey) as ThemeMode | null)
       : null;
     const initialTheme = storedTheme || defaultTheme;
-    
-    setThemeState(initialTheme);
-    
-    const updateResolvedTheme = () => {
-      try {
-        const resolved = resolveTheme(initialTheme, forcedTheme);
+    const initialResolved = resolveThemeMode(initialTheme);
 
-        setResolvedTheme(resolved);
-        applyThemeToDocument(resolved);
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : "Failed to initialize theme";
-        setError(errorMessage);
-        console.error("Theme initialization error:", err);
-      } finally {
-        setIsLoading(false);
+    dispatch({
+      type: "MOUNT",
+      theme: initialTheme,
+      resolvedTheme: initialResolved,
+    });
+    applyThemeToDocument(initialResolved);
+  }, [storageKey, defaultTheme, resolveThemeMode]);
+
+  useEffect(() => {
+    if (!enableSystem || forcedTheme || !state.isMounted) return;
+
+    const mediaQuery = globalThis.window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = () => {
+      if (themeRef.current === "system") {
+        applyTheme("system");
       }
     };
 
-    updateResolvedTheme();
-    
-    if (enableSystem && !forcedTheme) {
-      const mediaQuery = globalThis.window.matchMedia("(prefers-color-scheme: dark)");
-      const handleChange = () => {
-        if (theme === "system") {
-          updateResolvedTheme();
-        }
-      };
-      
-      mediaQuery.addEventListener("change", handleChange);
-      return () => mediaQuery.removeEventListener("change", handleChange);
-    }
-  }, [storageKey, defaultTheme, enableSystem, forcedTheme, theme]);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [enableSystem, forcedTheme, state.isMounted, applyTheme]);
 
   const value: ThemeContextType = useMemo(() => ({
-    theme,
-    resolvedTheme,
+    theme: state.theme,
+    resolvedTheme: state.resolvedTheme,
     setTheme,
     toggleTheme,
-    isMounted,
-    isLoading,
-    error,
+    isMounted: state.isMounted,
+    isLoading: state.isLoading,
+    error: state.error,
     clearError,
-  }), [theme, resolvedTheme, setTheme, toggleTheme, isMounted, isLoading, error, clearError]);
+  }), [state, setTheme, toggleTheme, clearError]);
 
   return (
     <ThemeContext.Provider value={value}>
@@ -209,9 +269,5 @@ export function useThemeState() {
 
 export function useThemeActions() {
   const { setTheme, toggleTheme, clearError } = useTheme();
-  return {
-    setTheme,
-    toggleTheme,
-    clearError,
-  };
+  return { setTheme, toggleTheme, clearError };
 }

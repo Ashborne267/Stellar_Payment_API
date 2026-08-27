@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { logger } from "./logger.js";
 
 const DEFAULT_SIGNATURE_WINDOW_SECONDS = 300;
 // Minimum HMAC secret length to prevent signing with trivially weak keys
@@ -149,12 +150,17 @@ function getApiGatewayRateLimitInfo(ip, now = Date.now()) {
 }
 
 function normalizeSignatureHeader(signatureHeader) {
-  if (typeof signatureHeader !== "string") return null;
-  const trimmed = signatureHeader.trim();
-  if (!trimmed.startsWith("sha256=")) return null;
-  const signature = trimmed.slice("sha256=".length).toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(signature)) return null;
-  return signature;
+  try {
+    if (typeof signatureHeader !== "string") return null;
+    const trimmed = signatureHeader.trim();
+    if (!trimmed.startsWith("sha256=")) return null;
+    const signature = trimmed.slice("sha256=".length).toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(signature)) return null;
+    return signature;
+  } catch (err) {
+    logger.warn({ err }, "Failed to normalize signature header");
+    return null;
+  }
 }
 
 function safeJsonStringify(value) {
@@ -163,20 +169,26 @@ function safeJsonStringify(value) {
       return "";
     }
     return JSON.stringify(value);
-  } catch {
+  } catch (err) {
+    logger.warn({ err }, "Failed to stringify value for signature");
     return "";
   }
 }
 
 function buildCanonicalPayload({ method, path, timestamp, body }) {
-  const normalizedMethod = String(method || "GET").toUpperCase();
-  const normalizedPath = String(path || "/");
-  const bodyHash = crypto
-    .createHash("sha256")
-    .update(safeJsonStringify(body), "utf8")
-    .digest("hex");
+  try {
+    const normalizedMethod = String(method || "GET").toUpperCase();
+    const normalizedPath = String(path || "/");
+    const bodyHash = crypto
+      .createHash("sha256")
+      .update(safeJsonStringify(body), "utf8")
+      .digest("hex");
 
-  return `${normalizedMethod}\n${normalizedPath}\n${timestamp}\n${bodyHash}`;
+    return `${normalizedMethod}\n${normalizedPath}\n${timestamp}\n${bodyHash}`;
+  } catch (err) {
+    logger.warn({ err }, "Failed to build canonical payload");
+    throw new Error("Failed to build canonical payload for signature");
+  }
 }
 
 function signaturesEqual(a, b) {
@@ -241,12 +253,18 @@ export function signApiGatewayRequest({
   timestamp,
   body,
 }) {
-  if (!secret || secret.length < MIN_SECRET_LENGTH || !timestamp) {
+  try {
+    if (!secret || secret.length < MIN_SECRET_LENGTH || !timestamp) {
+      logger.warn({ secretLength: secret?.length }, "Invalid parameters for signing API gateway request");
+      return null;
+    }
+
+    const payload = buildCanonicalPayload({ method, path, timestamp, body });
+    return crypto.createHmac("sha256", secret).update(payload, "utf8").digest("hex");
+  } catch (err) {
+    logger.error({ err }, "Failed to sign API gateway request");
     return null;
   }
-
-  const payload = buildCanonicalPayload({ method, path, timestamp, body });
-  return crypto.createHmac("sha256", secret).update(payload, "utf8").digest("hex");
 }
 
 export function verifyApiGatewayRequestSignature({
@@ -256,41 +274,94 @@ export function verifyApiGatewayRequestSignature({
   timestampHeader,
   signatureHeader,
   body,
+  clientIp,
   now = Date.now(),
   toleranceSeconds = Number(
     process.env.API_GATEWAY_SIGNATURE_TOLERANCE_SECONDS || DEFAULT_SIGNATURE_WINDOW_SECONDS,
   ),
 }) {
-  if (!secret || secret.length < MIN_SECRET_LENGTH) {
-    return { valid: false, reason: "Missing or insufficient signature secret" };
+  // Error recovery #900: Check circuit breaker first
+  if (_isCircuitBreakerOpen(now)) {
+    logger.warn("API gateway signature verification circuit breaker is open, rejecting request");
+    return {
+      valid: false,
+      reason: "Signature verification temporarily unavailable due to repeated failures",
+      code: "API_GATEWAY_CIRCUIT_BREAKER_OPEN",
+    };
   }
 
-  const timestamp = Number.parseInt(String(timestampHeader || ""), 10);
-  if (!Number.isFinite(timestamp)) {
-    return { valid: false, reason: "Missing or invalid x-api-timestamp header" };
-  }
+  try {
+    // Rate limiting check (issue #897)
+    if (clientIp && isApiGatewayRateLimited(clientIp, now)) {
+      const rateLimitInfo = getApiGatewayRateLimitInfo(clientIp, now);
+      logger.warn({ clientIp, rateLimitInfo }, "API gateway signature verification rate limit exceeded");
+      return {
+        valid: false,
+        reason: "API gateway signature verification rate limit exceeded",
+        code: "API_GATEWAY_RATE_LIMITED",
+        rateLimitInfo,
+      };
+    }
 
-  const deltaSeconds = Math.abs(Math.floor(now / 1000) - timestamp);
-  if (deltaSeconds > toleranceSeconds) {
-    return { valid: false, reason: "Request signature timestamp is outside the accepted window" };
-  }
+    if (!secret || secret.length < MIN_SECRET_LENGTH) {
+      recordApiGatewaySignatureAttempt(clientIp, false, now);
+      _recordCircuitBreakerFailure(now);
+      logger.warn({ secretLength: secret?.length, clientIp }, "Missing or insufficient signature secret");
+      return { valid: false, reason: "Missing or insufficient signature secret" };
+    }
 
-  const receivedSignature = normalizeSignatureHeader(signatureHeader);
-  if (!receivedSignature) {
-    return { valid: false, reason: "Missing or invalid x-api-signature header" };
-  }
+    const timestamp = Number.parseInt(String(timestampHeader || ""), 10);
+    if (!Number.isFinite(timestamp)) {
+      recordApiGatewaySignatureAttempt(clientIp, false, now);
+      _recordCircuitBreakerFailure(now);
+      logger.warn({ timestampHeader, clientIp }, "Missing or invalid x-api-timestamp header");
+      return { valid: false, reason: "Missing or invalid x-api-timestamp header" };
+    }
 
-  const expected = signApiGatewayRequest({
-    secret,
-    method,
-    path,
-    timestamp,
-    body,
-  });
+    const deltaSeconds = Math.abs(Math.floor(now / 1000) - timestamp);
+    if (deltaSeconds > toleranceSeconds) {
+      recordApiGatewaySignatureAttempt(clientIp, false, now);
+      _recordCircuitBreakerFailure(now);
+      logger.warn({ deltaSeconds, toleranceSeconds, clientIp }, "Request signature timestamp outside accepted window");
+      return { valid: false, reason: "Request signature timestamp is outside the accepted window" };
+    }
 
-  if (!expected || !signaturesEqual(receivedSignature, expected)) {
-    return { valid: false, reason: "Request signature verification failed" };
-  }
+    const receivedSignature = normalizeSignatureHeader(signatureHeader);
+    if (!receivedSignature) {
+      recordApiGatewaySignatureAttempt(clientIp, false, now);
+      _recordCircuitBreakerFailure(now);
+      logger.warn({ signatureHeader, clientIp }, "Missing or invalid x-api-signature header");
+      return { valid: false, reason: "Missing or invalid x-api-signature header" };
+    }
 
   return { valid: true };
+}
+    const expected = signApiGatewayRequest({
+      secret,
+      method,
+      path,
+      timestamp,
+      body,
+    });
+
+    if (!expected || !signaturesEqual(receivedSignature, expected)) {
+      recordApiGatewaySignatureAttempt(clientIp, false, now);
+      _recordCircuitBreakerFailure(now);
+      logger.warn({ clientIp, method, path }, "Request signature verification failed");
+      return { valid: false, reason: "Request signature verification failed" };
+    }
+
+    recordApiGatewaySignatureAttempt(clientIp, true, now);
+    _recordCircuitBreakerSuccess();
+    return { valid: true };
+  } catch (err) {
+    // Error recovery #900: Catch unexpected errors and fail gracefully
+    _recordCircuitBreakerFailure(now);
+    logger.error({ err, clientIp }, "Unexpected error during API gateway signature verification");
+    return {
+      valid: false,
+      reason: "Signature verification encountered an unexpected error",
+      code: "API_GATEWAY_VERIFICATION_ERROR",
+    };
+  }
 }

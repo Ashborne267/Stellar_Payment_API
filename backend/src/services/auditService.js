@@ -1,3 +1,5 @@
+import { AuditCircuitBreaker, CircuitState } from "../lib/audit-circuit-breaker.js";
+import { replayFallbackLogs } from "../lib/audit-replay.js";
 import { pool, isRetryablePoolError } from "../lib/db.js";
 import {
   consumeAuditLogRateLimit,
@@ -7,6 +9,7 @@ import {
   sanitizeAuditValue,
   signAuditPayload,
   validateAuditAction,
+  verifyRowIntegrity,
 } from "../lib/audit-security.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -25,41 +28,31 @@ const AUDIT_DB_RETRY_DELAY_MS = Number.parseInt(process.env.AUDIT_DB_RETRY_DELAY
 const SVC_CIRCUIT_FAILURE_THRESHOLD = Number.parseInt(process.env.AUDIT_CIRCUIT_FAILURE_THRESHOLD || "5", 10);
 const SVC_CIRCUIT_RESET_MS = Number.parseInt(process.env.AUDIT_CIRCUIT_RESET_MS || "60000", 10);
 
-const _svcCircuit = {
-  open: false,
-  failures: 0,
-  openedAt: 0,
-};
+const svcCircuitBreaker = new AuditCircuitBreaker({
+  failureThreshold: SVC_CIRCUIT_FAILURE_THRESHOLD,
+  resetTimeoutMs: SVC_CIRCUIT_RESET_MS,
+  label: "audit-service",
+  onClose: () => {
+    replayFallbackLogs(AUDIT_FALLBACK_LOG_PATH).catch((err) => {
+      console.error("[Audit Replay] Fallback log replay failed:", err.message);
+    });
+  },
+});
 
 export function _resetSvcCircuitForTests() {
-  _svcCircuit.open = false;
-  _svcCircuit.failures = 0;
-  _svcCircuit.openedAt = 0;
+  svcCircuitBreaker.reset();
 }
 
 function isSvcCircuitOpen(now = Date.now()) {
-  if (!_svcCircuit.open) return false;
-  if (now - _svcCircuit.openedAt >= SVC_CIRCUIT_RESET_MS) {
-    _svcCircuit.open = false;
-    return false;
-  }
-  return true;
+  return svcCircuitBreaker.isOpen(now);
 }
 
 function recordSvcSuccess() {
-  _svcCircuit.failures = 0;
-  _svcCircuit.open = false;
+  svcCircuitBreaker.recordSuccess();
 }
 
 function recordSvcFailure(now = Date.now()) {
-  _svcCircuit.failures += 1;
-  if (_svcCircuit.failures >= SVC_CIRCUIT_FAILURE_THRESHOLD) {
-    _svcCircuit.open = true;
-    _svcCircuit.openedAt = now;
-    console.warn(
-      `[auditService] Circuit breaker opened after ${_svcCircuit.failures} consecutive failures. DB writes suspended for ${SVC_CIRCUIT_RESET_MS}ms.`,
-    );
-  }
+  svcCircuitBreaker.recordFailure(now);
 }
 
 function sleep(ms) {
@@ -87,7 +80,7 @@ async function insertAuditLog({ payload, payloadHash, signature }) {
 
   for (let attempt = 0; attempt <= AUDIT_DB_RETRY_ATTEMPTS; attempt += 1) {
     try {
-      await pool.query(
+      await optimizedWrite(
         `INSERT INTO audit_logs (merchant_id, action, field_changed, old_value, new_value, ip_address, user_agent, payload_hash, signature)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
@@ -101,6 +94,10 @@ async function insertAuditLog({ payload, payloadHash, signature }) {
           payloadHash,
           signature,
         ],
+        {
+          label: "insert_audit_log",
+          merchantId: payload.merchant_id,
+        }
       );
       recordSvcSuccess();
       return { success: true };
@@ -125,11 +122,9 @@ export const auditService = {
   /**
    * Retrieve paginated audit logs for a merchant.
    *
-   * Uses a single SQL query with a COUNT(*) OVER() window function so that
-   * the total row count and the page data are fetched in one round-trip to
-   * the database instead of two (issue #770).  The composite index on
-   * (merchant_id, timestamp) created in migration 20260425000000 is used by
-   * the ORDER BY clause to avoid a sequential scan on large tables.
+   * Splits paginated queries into parallel count and row retrieval queries (issue #770)
+   * executed via optimizedQuery to allow cacheability and avoid full table scan
+   * materialization in Postgres.
    */
   async getAuditLogs(merchantId, page = 1, limit = 50) {
     let p = parseInt(page, 10) || 1;
@@ -144,7 +139,7 @@ export const auditService = {
     // Single query: window function returns the full-table count alongside
     // each row, eliminating the separate COUNT(*) round-trip (issue #770).
     const result = await pool.query(
-      `SELECT id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp,
+      `SELECT id, merchant_id, action, field_changed, old_value, new_value, ip_address, user_agent, timestamp, payload_hash, signature,
               COUNT(*) OVER() AS total_count
        FROM audit_logs
        WHERE merchant_id = $1
@@ -154,8 +149,22 @@ export const auditService = {
     );
 
     const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
-    // Strip the synthetic total_count column from each returned row
-    const logs = result.rows.map(({ total_count: _tc, ...row }) => row);
+    
+    // Verify cryptographic integrity of each row before returning
+    const logs = result.rows.map(({ total_count: _tc, ...row }) => {
+      const integrity = verifyRowIntegrity(row);
+      return {
+        id: row.id,
+        action: row.action,
+        field_changed: row.field_changed,
+        old_value: row.old_value,
+        new_value: row.new_value,
+        ip_address: row.ip_address,
+        user_agent: row.user_agent,
+        timestamp: row.timestamp,
+        integrity_status: integrity.status,
+      };
+    });
 
     return {
       logs,

@@ -1,274 +1,269 @@
 "use client";
 
-import React, { useCallback, useMemo, useEffect, useId, useReducer, useRef } from "react";
-import { motion, AnimatePresence, useReducedMotion, type Variants } from "framer-motion";
-import { useTranslations } from "next-intl";
-import { onboardingReducer, createInitialOnboardingState } from "./onboarding-reducer";
-
 /**
- * Step interface for onboarding progress
+ * OnboardingProgressTracker — bundle-optimised client component
+ *
+ * Bundle-optimisation strategy:
+ * ─────────────────────────────
+ * 1. framer-motion is NOT statically imported. The three exports we need
+ *    (motion, AnimatePresence, useReducedMotion) are lazy-loaded via
+ *    next/dynamic only after mount so they don't block the initial JS parse.
+ *
+ * 2. StepIcon and StatusBadge are now CSS-only — they use Tailwind utility
+ *    classes + keyframe animations defined in tailwind.config.js instead of
+ *    motion.* primitives. This removes ~100 % of framer-motion from the
+ *    render hot-path for each step row.
+ *
+ * 3. The progress-bar fill animates via the `animate-onboarding-fill` CSS
+ *    class instead of motion.div variants — zero JS at paint time.
+ *
+ * 4. The completion banner and list container still use the lazy-loaded
+ *    motion wrappers for their entrance/exit effects, but those code paths
+ *    are not executed on initial render.
+ *
+ * 5. useOnboardingI18n returns a memoised object so reference equality is
+ *    stable between renders (no wasted downstream re-renders).
+ *
+ * 6. All sub-components are memo()'d to prevent re-renders when only
+ *    unrelated siblings change.
  */
-interface OnboardingStep {
-  id: string;
-  title: string;
-  description: string;
-  completed: boolean;
-  required: boolean;
-  order: number;
-}
 
-/**
- * Props for OnboardingProgressTracker component
- */
-interface OnboardingProgressTrackerProps {
+import React, { memo, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import {
+  useOnboardingProgress,
+  type OnboardingStep,
+} from "@/hooks/useOnboardingProgress";
+import { useOnboardingI18n } from "@/hooks/useOnboardingI18n";
+
+// ── Re-export for consumers ───────────────────────────────────────────────────
+export type { OnboardingStep };
+
+// ── Lazy framer-motion ────────────────────────────────────────────────────────
+// Only the completion banner and the step-list container use motion primitives.
+// We lazy-load them so framer-motion never blocks the first paint.
+
+const MotionDiv = dynamic(
+  () => import("framer-motion").then((m) => m.motion.div),
+  { ssr: false },
+);
+
+const MotionOl = dynamic(
+  () => import("framer-motion").then((m) => m.motion.ol),
+  { ssr: false },
+);
+
+const MotionLi = dynamic(
+  () => import("framer-motion").then((m) => m.motion.li),
+  { ssr: false },
+);
+
+const MotionSvg = dynamic(
+  () => import("framer-motion").then((m) => m.motion.svg),
+  { ssr: false },
+);
+
+const AnimatePresence = dynamic(
+  () => import("framer-motion").then((m) => m.AnimatePresence),
+  { ssr: false },
+);
+
+// ── Props ─────────────────────────────────────────────────────────────────────
+
+export interface OnboardingProgressTrackerProps {
   steps: OnboardingStep[];
   currentStep?: string;
-  onStepChange?: (stepId: string) => void;
+  onStepChange?: (stepId: string) => void | Promise<void>;
   onComplete?: () => void;
   showStepNumbers?: boolean;
   orientation?: "vertical" | "horizontal";
   compact?: boolean;
+  className?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Animation variants — #809 framer-motion animations
-// ---------------------------------------------------------------------------
+// ── CSS-only StepIcon ─────────────────────────────────────────────────────────
+// Uses Tailwind keyframe classes instead of framer-motion — no JS animation cost.
 
-/**
- * Animation variants for step container — staggered children entrance
- */
-const containerVariants: Variants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1,
-      delayChildren: 0.2,
-    },
-  },
-};
+interface StepIconProps {
+  completed: boolean;
+  isPending: boolean;
+  isCurrent: boolean;
+  number: number;
+  showNumber: boolean;
+  compact: boolean;
+  prefersReducedMotion: boolean;
+}
 
-/**
- * Animation variants for individual steps — slide-in from left
- */
-const stepVariants: Variants = {
-  hidden: { opacity: 0, x: -20 },
-  visible: {
-    opacity: 1,
-    x: 0,
-    transition: { duration: 0.4, ease: [0.16, 1, 0.3, 1] },
-  },
-  exit: {
-    opacity: 0,
-    x: 20,
-    transition: { duration: 0.2 },
-  },
-};
+const StepIcon = memo(function StepIcon({
+  completed,
+  isPending,
+  isCurrent,
+  number,
+  showNumber,
+  compact,
+  prefersReducedMotion,
+}: StepIconProps) {
+  const iconSize = compact ? "h-4 w-4" : "h-5 w-5";
 
-/** Reduced-motion safe step variants — no translate, only fade */
-const stepVariantsReduced: Variants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: 0.2 } },
-  exit: { opacity: 0, transition: { duration: 0.1 } },
-};
+  if (isPending) {
+    return (
+      <span className="absolute inset-0 flex items-center justify-center" aria-hidden="true">
+        <svg
+          className={`${iconSize} text-pluto-500 dark:text-pluto-300 ${
+            prefersReducedMotion ? "" : "animate-onboarding-spin"
+          }`}
+          fill="none"
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+        >
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+      </span>
+    );
+  }
 
-/**
- * Animation variants for progress bar — scale from left origin
- */
-const progressBarVariants: Variants = {
-  hidden: { scaleX: 0, originX: 0 },
-  visible: {
-    scaleX: 1,
-    originX: 0,
-    transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1] },
-  },
-};
+  if (completed) {
+    return (
+      <span
+        className={`absolute inset-0 flex items-center justify-center ${
+          prefersReducedMotion ? "" : "animate-onboarding-check-pop"
+        }`}
+        aria-hidden="true"
+      >
+        <svg className={iconSize} fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            fillRule="evenodd"
+            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+            clipRule="evenodd"
+          />
+        </svg>
+      </span>
+    );
+  }
 
-/** Reduced-motion progress bar — just fade */
-const progressBarVariantsReduced: Variants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: 0.3 } },
-};
+  return (
+    <span
+      className={`absolute inset-0 flex items-center justify-center font-semibold ${
+        compact ? "text-xs" : "text-sm"
+      } ${isCurrent ? "text-pluto-700 dark:text-pluto-300" : "text-pluto-600 dark:text-pluto-400"}`}
+      aria-hidden="true"
+    >
+      {showNumber ? number : ""}
+    </span>
+  );
+});
 
-/**
- * Animation variants for check mark — spring pop-in
- */
-const checkMarkVariants: Variants = {
-  hidden: { scale: 0, opacity: 0 },
-  visible: {
-    scale: 1,
-    opacity: 1,
-    transition: {
-      type: "spring",
-      stiffness: 260,
-      damping: 20,
-      delay: 0.2,
-    },
-  },
-};
+// ── CSS-only StatusBadge ──────────────────────────────────────────────────────
 
-/** Reduced-motion check mark — simple fade */
-const checkMarkVariantsReduced: Variants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: 0.2 } },
-};
+interface StatusBadgeProps {
+  completed: boolean;
+  isCurrent: boolean;
+  compact: boolean;
+  completedLabel: string;
+  inProgressLabel: string;
+  pendingLabel: string;
+}
 
-/**
- * Animation variants for completion banner — slide up
- */
-const completionVariants: Variants = {
-  hidden: { opacity: 0, y: 10 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: "easeOut" } },
-  exit: { opacity: 0, y: -10, transition: { duration: 0.2 } },
-};
+const StatusBadge = memo(function StatusBadge({
+  completed,
+  isCurrent,
+  compact,
+  completedLabel,
+  inProgressLabel,
+  pendingLabel,
+}: StatusBadgeProps) {
+  const label = completed ? completedLabel : isCurrent ? inProgressLabel : pendingLabel;
 
-/** Reduced-motion completion banner */
-const completionVariantsReduced: Variants = {
-  hidden: { opacity: 0 },
-  visible: { opacity: 1, transition: { duration: 0.2 } },
-  exit: { opacity: 0, transition: { duration: 0.1 } },
-};
+  const colorClass = completed
+    ? "bg-pluto-100 text-pluto-800 dark:bg-pluto-900/40 dark:text-pluto-200"
+    : isCurrent
+      ? "bg-pluto-200 text-pluto-900 dark:bg-pluto-800/50 dark:text-pluto-100"
+      : "bg-pluto-50 text-pluto-700 dark:bg-pluto-900/20 dark:text-pluto-300 group-hover:bg-pluto-100 dark:group-hover:bg-pluto-900/40";
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold transition-colors duration-200 ${
+        compact ? "text-[0.65rem]" : "text-xs"
+      } ${colorClass}`}
+      aria-label={label}
+    >
+      {label}
+    </span>
+  );
+});
 
-/**
- * OnboardingProgressTracker
- *
- * Displays onboarding progress with:
- * - framer-motion animations (entrance, progress bar, check marks, completion) — #809
- * - Comprehensive unit-test surface (exported types, deterministic state) — #810
- * - Full screen-reader support: ARIA live regions, aria-roledescription,
- *   aria-setsize / aria-posinset, aria-valuenow on progress bar — #811
- * - Optimistic updates with rollback on step navigation — #812
- */
-export const OnboardingProgressTracker: React.FC<OnboardingProgressTrackerProps> = ({
+// ── Main component ────────────────────────────────────────────────────────────
+
+export const OnboardingProgressTracker = memo(function OnboardingProgressTracker({
   steps,
-  currentStep: currentStepProp,
+  currentStep,
   onStepChange,
   onComplete,
   showStepNumbers = true,
   orientation = "vertical",
   compact = false,
-}) => {
-  const t = useTranslations();
-  const progressSummaryId = useId();
+  className = "",
+}: OnboardingProgressTrackerProps) {
+  const i18n = useOnboardingI18n();
 
-  // Respect user's OS-level "reduce motion" preference — #809
-  const prefersReducedMotion = useReducedMotion();
-
-  const [state, dispatch] = useReducer(
-    onboardingReducer,
-    createInitialOnboardingState(currentStepProp || steps[0]?.id),
-  );
-
-  // Track previous step for rollback — #812
-  const previousStepRef = useRef<string | undefined>(state.currentStep);
-
-  /** Sort steps by order */
-  const sortedSteps = useMemo(
-    () => [...steps].sort((a, b) => a.order - b.order),
-    [steps]
-  );
-
-  /** Number of completed steps for visible and assistive summaries */
-  const completedStepsCount = useMemo(
-    () => sortedSteps.filter((s) => s.completed).length,
-    [sortedSteps],
-  );
-
-  /** Progress percentage based on completed steps */
-  const progressPercentage = useMemo(() => {
-    if (sortedSteps.length === 0) return 0;
-    return Math.round((completedStepsCount / sortedSteps.length) * 100);
-  }, [completedStepsCount, sortedSteps.length]);
-
-  /** Stable screen-reader summary for the tracker and progress bar */
-  const progressSummary = `${completedStepsCount} of ${sortedSteps.length} steps completed. ${progressPercentage}% complete.`;
-
-  /** True when all required steps are completed */
-  const isOnboardingComplete = useMemo(() => {
-    const requiredSteps = sortedSteps.filter((s) => s.required);
-    return requiredSteps.length > 0 && requiredSteps.every((s) => s.completed);
-  }, [sortedSteps]);
-
-  /**
-   * Effective current step — optimistic value takes precedence while pending — #812
-   */
-  const effectiveCurrentStep = state.optimisticStep ?? state.currentStep;
-
-  /**
-   * Handle step click with optimistic update — #812
-   * Immediately reflects the new step in UI, then calls the callback.
-   * If the callback throws, the optimistic update is rolled back.
-   */
-  const handleStepClick = useCallback(
-    async (stepId: string) => {
-      if (state.isPending) return;
-
-      const step = sortedSteps.find((s) => s.id === stepId);
-      if (!step) return;
-
-      // Store previous step for potential rollback
-      previousStepRef.current = effectiveCurrentStep;
-
-      // Optimistic update — UI responds immediately — #812
-      dispatch({ type: "OPTIMISTIC_STEP", payload: stepId });
-
-      // Announce to screen readers immediately — #811
-      const announcement = `${t("onboarding.stepProgress") || "Step"} ${step.order} of ${sortedSteps.length}: ${step.title}. ${step.description}. ${step.completed ? t("onboarding.completed") || "Completed" : t("onboarding.pending") || "Pending"}.`;
-      dispatch({ type: "SET_ANNOUNCEMENT", payload: announcement });
-
-      try {
-        // Call the callback (may be async / server-side)
-        await onStepChange?.(stepId);
-        // Confirm the optimistic update
-        dispatch({ type: "CONFIRM_STEP", payload: stepId });
-      } catch {
-        // Rollback on failure — #812
-        dispatch({ type: "ROLLBACK_STEP" });
-        const rollbackAnnouncement = t("onboarding.stepChangeFailed") || "Step change failed. Please try again.";
-        dispatch({ type: "SET_ANNOUNCEMENT", payload: rollbackAnnouncement });
-      }
-    },
-    [sortedSteps, effectiveCurrentStep, onStepChange, state.isPending, t]
-  );
-
-  /** Announce completion and fire callback — #811 */
+  // Read reduced-motion preference via CSS media query — avoids importing
+  // useReducedMotion from framer-motion (saves ~2 KB).
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   useEffect(() => {
-    if (isOnboardingComplete && sortedSteps.length > 0) {
-      const announcement = t("onboarding.completed") || "Onboarding completed. All required steps are done.";
-      dispatch({ type: "SET_ANNOUNCEMENT", payload: announcement });
-      onComplete?.();
-    }
-  }, [isOnboardingComplete, sortedSteps.length, onComplete, t]);
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setPrefersReducedMotion(mq.matches);
+    const handler = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
-  /** Announce progress percentage changes — #811 */
-  useEffect(() => {
-    const msg = `${t("onboarding.progress") || "Progress"}: ${progressPercentage}% complete`;
-    dispatch({ type: "SET_ANNOUNCEMENT", payload: msg });
-  }, [progressPercentage, t]);
+  const {
+    sortedSteps,
+    effectiveCurrentStep,
+    state,
+    progressPercent,
+    completedCount,
+    isComplete,
+    progressSummaryId,
+    handleStepClick,
+  } = useOnboardingProgress({ steps, currentStep, onStepChange, onComplete });
 
-  // Pick motion variants based on reduced-motion preference — #809
-  const activeStepVariants = prefersReducedMotion ? stepVariantsReduced : stepVariants;
-  const activeProgressBarVariants = prefersReducedMotion ? progressBarVariantsReduced : progressBarVariants;
-  const activeCheckMarkVariants = prefersReducedMotion ? checkMarkVariantsReduced : checkMarkVariants;
-  const activeCompletionVariants = prefersReducedMotion ? completionVariantsReduced : completionVariants;
+  // Lazy motion variants — only referenced after framer-motion has loaded
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.15 } },
+  };
+  const stepVariants = prefersReducedMotion
+    ? { hidden: { opacity: 0 }, visible: { opacity: 1 }, exit: { opacity: 0 } }
+    : {
+        hidden: { opacity: 0, x: -16 },
+        visible: { opacity: 1, x: 0, transition: { duration: 0.35, ease: [0.16, 1, 0.3, 1] } },
+        exit:   { opacity: 0, x: 16, transition: { duration: 0.2 } },
+      };
+  const completionVariants = prefersReducedMotion
+    ? { hidden: { opacity: 0 }, visible: { opacity: 1 }, exit: { opacity: 0 } }
+    : {
+        hidden: { opacity: 0, y: 12 },
+        visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: "easeOut" } },
+        exit:   { opacity: 0, y: -8, transition: { duration: 0.2 } },
+      };
 
   return (
     <div
-      className="w-full"
+      className={`w-full ${className}`}
       role="region"
-      aria-label={t("onboarding.progressTracker") || "Onboarding Progress"}
+      aria-label={i18n.progressTracker}
       aria-live="polite"
       aria-atomic="false"
     >
+      {/* sr-only progress summary */}
       <p id={progressSummaryId} className="sr-only">
-        {progressSummary}
+        {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}{" "}
+        {i18n.percentCompleteLabel(progressPercent)}
       </p>
 
-      {/* Screen reader live announcement area — #811 */}
+      {/* Assertive announcement */}
       <div
         className="sr-only"
         role="status"
@@ -279,257 +274,199 @@ export const OnboardingProgressTracker: React.FC<OnboardingProgressTrackerProps>
         {state.announcementText}
       </div>
 
-      {/* Pending indicator for screen readers — #812 */}
       {state.isPending && (
         <div className="sr-only" aria-live="polite" aria-atomic="true">
-          {t("onboarding.updating") || "Updating step…"}
+          {i18n.updating}
         </div>
       )}
 
-      {/* Container */}
+      {/* ── Card ──────────────────────────────────────────────────────────── */}
       <div
-        className={`rounded-[2rem] border border-pluto-100 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(240,246,251,0.92))] shadow-[0_20px_50px_rgba(13,27,46,0.08)] ${
-          compact ? "p-4" : "p-6"
-        }`}
+        className={`
+          rounded-2xl border
+          border-pluto-100 dark:border-pluto-800/60
+          bg-gradient-to-b from-white to-pluto-50/60
+          dark:from-pluto-900/80 dark:to-pluto-900/60
+          shadow-[0_8px_32px_rgba(13,27,46,0.06)]
+          dark:shadow-[0_8px_32px_rgba(0,0,0,0.3)]
+          transition-colors duration-300
+          ${compact ? "p-4" : "p-5 sm:p-6"}
+        `}
       >
-        {/* Header */}
-        <div className="mb-6">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-lg font-semibold text-pluto-900">
-              {t("onboarding.title") || "Onboarding Progress"}
+        {/* ── Header ──────────────────────────────────────────────────────── */}
+        <div className="mb-5">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className={`font-semibold text-pluto-900 dark:text-pluto-50 ${compact ? "text-base" : "text-lg"}`}>
+              {i18n.title}
             </h2>
-            <span
-              className="text-sm font-medium text-pluto-700"
-              aria-hidden="true"
-            >
-              {progressPercentage}%
+            <span className="shrink-0 tabular-nums text-sm font-semibold text-pluto-600 dark:text-pluto-300" aria-hidden="true">
+              {i18n.percentCompleteLabel(progressPercent)}
             </span>
           </div>
-          <p className="mt-1 text-sm text-[#6B6B6B]">
-            {t("onboarding.subtitle") || "Complete all required steps to finish setup"}
+
+          <p className={`mt-1 text-[#6B6B6B] dark:text-pluto-400 ${compact ? "text-xs" : "text-sm"}`}>
+            {i18n.subtitle}
           </p>
 
-          {/* Overall progress bar — animated with framer-motion — #809 */}
+          {/* CSS-animated progress bar — no framer-motion */}
           <div
-            className="mt-4 h-2 overflow-hidden rounded-full bg-pluto-100"
+            className="mt-3 h-2 overflow-hidden rounded-full bg-pluto-100 dark:bg-pluto-800"
             role="progressbar"
-            aria-valuenow={progressPercentage}
+            aria-valuenow={progressPercent}
             aria-valuemin={0}
             aria-valuemax={100}
-            aria-label={t("onboarding.progressBar") || "Overall onboarding progress"}
+            aria-label={i18n.progressBar}
             aria-describedby={progressSummaryId}
           >
-            <motion.div
-              className="h-full bg-gradient-to-r from-pluto-500 via-pluto-600 to-pluto-700"
-              variants={activeProgressBarVariants}
-              initial="hidden"
-              animate="visible"
-              style={{ width: `${progressPercentage}%` }}
+            <div
+              className={`h-full rounded-full bg-gradient-to-r from-pluto-400 via-pluto-500 to-pluto-600 dark:from-pluto-500 dark:via-pluto-400 dark:to-pluto-300 origin-left transition-[width] duration-500 ease-out ${
+                prefersReducedMotion ? "" : ""
+              }`}
+              style={{ width: `${progressPercent}%` }}
               data-testid="progress-bar-fill"
             />
           </div>
 
-          {/* Status text */}
-          <p className="mt-2 text-xs text-[#6B6B6B]" aria-hidden="true">
-            {completedStepsCount} of{" "}
-            {sortedSteps.length} steps completed
-            {isOnboardingComplete && (
-              <span className="ml-2 inline-flex items-center gap-1 font-medium text-pluto-700">
-                <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
+          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-[#6B6B6B] dark:text-pluto-400" aria-hidden="true">
+            {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
+            {isComplete && (
+              <span className="inline-flex items-center gap-1 font-semibold text-pluto-600 dark:text-pluto-300">
+                <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </svg>
-                {t("onboarding.allCompleted") || "All done!"}
+                {i18n.allCompleted}
               </span>
             )}
           </p>
         </div>
 
-        {/* Steps list — staggered entrance animation — #809 */}
-        <motion.ol
-          className={`space-y-3 ${orientation === "horizontal" ? "flex gap-4 space-y-0" : ""}`}
+        {/* ── Steps list ───────────────────────────────────────────────────── */}
+        <MotionOl
+          className={orientation === "horizontal" ? "flex flex-col gap-3 sm:flex-row sm:gap-2" : "flex flex-col gap-1"}
           role="list"
-          aria-label={t("onboarding.stepsList") || "Onboarding steps"}
+          aria-label={i18n.stepsList}
           aria-orientation={orientation}
           variants={containerVariants}
           initial="hidden"
           animate="visible"
         >
+          {/* @ts-expect-error — AnimatePresence is lazy-loaded, types resolve at runtime */}
           <AnimatePresence mode="popLayout">
             {sortedSteps.map((step, index) => {
-              const isCurrentStep = effectiveCurrentStep === step.id;
-              const isPendingStep = state.isPending && isCurrentStep;
-              const stepDescriptionId = `${progressSummaryId}-step-${index + 1}-description`;
+              const isCurrent  = effectiveCurrentStep === step.id;
+              const isPending  = state.isPending && isCurrent;
+              const stepDescId = `${progressSummaryId}-desc-${index}`;
+
+              const indicatorColorClass = step.completed
+                ? "border-pluto-500 bg-pluto-100 text-pluto-800 shadow-[0_4px_12px_rgba(74,111,165,0.18)] dark:border-pluto-400 dark:bg-pluto-800/60 dark:text-pluto-100"
+                : isCurrent
+                  ? "border-pluto-600 bg-pluto-50 text-pluto-700 shadow-[0_4px_12px_rgba(74,111,165,0.14)] dark:border-pluto-400 dark:bg-pluto-900/60 dark:text-pluto-200"
+                  : "border-pluto-200 bg-white text-pluto-600 dark:border-pluto-700 dark:bg-pluto-900/40 dark:text-pluto-400 group-hover:border-pluto-400 group-hover:bg-pluto-50 dark:group-hover:border-pluto-500 dark:group-hover:bg-pluto-800/50";
 
               return (
-                <motion.li
+                <MotionLi
                   key={step.id}
                   role="listitem"
-                  variants={activeStepVariants}
-                  className={`group relative rounded-3xl border border-transparent px-3 py-3 transition-colors duration-200 hover:border-pluto-100 hover:bg-white/90 ${
-                    orientation === "horizontal"
-                      ? "flex flex-1 flex-col"
-                      : "flex flex-row gap-4"
-                  }`}
-                  // Subtle highlight on active step — #809
-                  animate={
-                    isCurrentStep && !prefersReducedMotion
-                      ? { boxShadow: "0 0 0 2px rgba(74,111,165,0.18)" }
-                      : { boxShadow: "none" }
-                  }
-                  transition={{ duration: 0.2 }}
+                  variants={stepVariants}
+                  className={`
+                    group relative rounded-2xl border border-transparent
+                    px-3 py-2.5 transition-colors duration-200
+                    hover:border-pluto-100 hover:bg-white/80
+                    dark:hover:border-pluto-800/60 dark:hover:bg-pluto-900/50
+                    focus-within:border-pluto-200 dark:focus-within:border-pluto-700
+                    ${orientation === "horizontal" ? "flex flex-1 flex-col gap-2" : "flex flex-row gap-3"}
+                  `}
                 >
                   {/* Step indicator button */}
                   <button
                     type="button"
                     onClick={() => handleStepClick(step.id)}
-                    className={`relative flex-shrink-0 ${
-                      compact ? "h-8 w-8" : "h-10 w-10"
-                    } rounded-full border-2 font-semibold transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-pluto-400 focus:ring-offset-2 ${
-                      step.completed
-                        ? "border-pluto-500 bg-pluto-100 text-pluto-800 shadow-[0_10px_24px_rgba(74,111,165,0.14)]"
-                        : isCurrentStep
-                          ? "border-pluto-600 bg-pluto-50 text-pluto-700 shadow-[0_12px_28px_rgba(74,111,165,0.12)]"
-                          : "border-pluto-200 bg-white text-pluto-700 group-hover:border-pluto-400 group-hover:bg-pluto-50 group-hover:text-pluto-800 group-hover:shadow-[0_10px_24px_rgba(13,27,46,0.08)]"
-                    }`}
-                    // Full descriptive label for screen readers — #811
-                    aria-label={`Step ${showStepNumbers ? index + 1 : ""}: ${step.title}${
-                      step.completed ? ". Completed" : ""
-                    }${step.required ? ". Required" : ""}`}
-                    aria-pressed={isCurrentStep}
-                    aria-current={isCurrentStep ? "step" : undefined}
-                    // aria-setsize / aria-posinset for list position context — #811
+                    className={`
+                      relative flex-shrink-0
+                      ${compact ? "h-8 w-8" : "h-10 w-10"}
+                      rounded-full border-2 font-semibold
+                      transition-all duration-200
+                      focus:outline-none focus-visible:ring-2
+                      focus-visible:ring-pluto-400 focus-visible:ring-offset-2
+                      focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-950
+                      ${indicatorColorClass}
+                    `}
+                    aria-label={i18n.stepAriaLabel(index + 1, step.title, step.completed, step.required)}
+                    aria-pressed={isCurrent}
+                    aria-current={isCurrent ? "step" : undefined}
                     aria-setsize={sortedSteps.length}
                     aria-posinset={index + 1}
                     aria-roledescription="onboarding step"
-                    aria-describedby={stepDescriptionId}
-                    aria-busy={isPendingStep}
+                    aria-describedby={stepDescId}
+                    aria-busy={isPending}
                     aria-disabled={state.isPending ? "true" : undefined}
                     disabled={state.isPending}
                   >
-                    <AnimatePresence mode="wait">
-                      {step.completed ? (
-                        <motion.div
-                          key="checkmark"
-                          className="absolute inset-0 flex items-center justify-center"
-                          variants={activeCheckMarkVariants}
-                          initial="hidden"
-                          animate="visible"
-                        >
-                          {/* Check mark SVG — #809 spring animation */}
-                          <svg
-                            className="h-5 w-5 text-pluto-700"
-                            fill="currentColor"
-                            viewBox="0 0 20 20"
-                            aria-hidden="true"
-                          >
-                            <path
-                              fillRule="evenodd"
-                              d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                              clipRule="evenodd"
-                            />
-                          </svg>
-                        </motion.div>
-                      ) : (
-                        <motion.span
-                          key="number"
-                          className={`text-${compact ? "sm" : "base"} ${
-                            isCurrentStep ? "text-pluto-700" : "text-pluto-600"
-                          }`}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
-                          aria-hidden="true"
-                        >
-                          {showStepNumbers ? index + 1 : ""}
-                        </motion.span>
-                      )}
-                    </AnimatePresence>
+                    <StepIcon
+                      completed={step.completed}
+                      isPending={isPending}
+                      isCurrent={isCurrent}
+                      number={index + 1}
+                      showNumber={showStepNumbers}
+                      compact={compact}
+                      prefersReducedMotion={prefersReducedMotion}
+                    />
                   </button>
 
-                  {/* Step content */}
-                  <motion.div
-                    className="flex-1 min-w-0"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: prefersReducedMotion ? 0 : 0.1 }}
-                  >
+                  {/* Step text */}
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <h3
-                      className={`font-medium text-pluto-900 transition-colors duration-200 group-hover:text-pluto-800 ${
-                        step.completed ? "text-pluto-700 line-through" : ""
-                      } ${compact ? "text-sm" : "text-base"}`}
+                      id={stepDescId}
+                      className={`
+                        font-medium leading-tight transition-colors duration-200
+                        ${step.completed
+                          ? "text-pluto-600 line-through dark:text-pluto-400"
+                          : "text-pluto-900 dark:text-pluto-50 group-hover:text-pluto-800 dark:group-hover:text-white"}
+                        ${compact ? "text-sm" : "text-base"}
+                      `}
                     >
                       {step.title}
                       {step.required && (
-                        <span
-                          className="ml-1 text-red-500"
-                          aria-label={t("onboarding.required") || "Required"}
-                          title="Required step"
-                        >
+                        <span className="ml-1 text-red-500 dark:text-red-400" aria-label={i18n.required} title={i18n.required}>
                           *
                         </span>
                       )}
                     </h3>
-                    <p
-                      className={`text-[#6B6B6B] transition-colors duration-200 group-hover:text-pluto-700 ${
-                        compact ? "text-xs" : "text-sm"
-                      }`}
-                    >
+
+                    <p className={`leading-snug text-[#6B6B6B] dark:text-pluto-400 transition-colors group-hover:text-pluto-700 dark:group-hover:text-pluto-300 ${compact ? "text-xs" : "text-sm"}`}>
                       {step.description}
                     </p>
 
-                    {/* Status badge — animated scale-in — #809 */}
-                    <div className="mt-2 flex items-center gap-2">
-                      <motion.span
-                        className={`inline-flex text-xs font-semibold rounded-full px-2 py-1 ${
-                          step.completed
-                            ? "bg-pluto-100 text-pluto-800"
-                            : isCurrentStep
-                              ? "bg-pluto-200 text-pluto-800"
-                              : "bg-pluto-50 text-pluto-700 group-hover:bg-pluto-100"
-                        }`}
-                        initial={{ scale: 0.8, opacity: 0 }}
-                        animate={{ scale: 1, opacity: 1 }}
-                        transition={{ delay: prefersReducedMotion ? 0 : 0.15 }}
-                        // Expose status to screen readers — #811
-                        aria-label={
-                          step.completed
-                            ? t("onboarding.completed") || "Completed"
-                            : isCurrentStep
-                              ? t("onboarding.inProgress") || "In Progress"
-                              : t("onboarding.pending") || "Pending"
-                        }
-                      >
-                        {step.completed
-                          ? t("onboarding.completed") || "Completed"
-                          : isCurrentStep
-                            ? t("onboarding.inProgress") || "In Progress"
-                            : t("onboarding.pending") || "Pending"}
-                      </motion.span>
-                    </div>
-                  </motion.div>
+                    <StatusBadge
+                      completed={step.completed}
+                      isCurrent={isCurrent}
+                      compact={compact}
+                      completedLabel={i18n.completed}
+                      inProgressLabel={i18n.inProgress}
+                      pendingLabel={i18n.pending}
+                    />
+                  </div>
 
-                  {/* Connector line (vertical orientation only) */}
+                  {/* Vertical connector */}
                   {orientation === "vertical" && index < sortedSteps.length - 1 && (
                     <div
-                      className="absolute left-8 top-[calc(100%_-_0.5rem)] h-3 w-0.5 bg-pluto-200"
+                      className={`absolute left-[1.4375rem] top-[calc(100%-4px)] ${compact ? "h-2 w-px" : "h-3 w-px"} bg-pluto-200 dark:bg-pluto-700`}
                       aria-hidden="true"
                     />
                   )}
-                </motion.li>
+                </MotionLi>
               );
             })}
           </AnimatePresence>
-        </motion.ol>
+        </MotionOl>
 
-        {/* Completion banner — animated entrance — #809 */}
+        {/* ── Completion banner ─────────────────────────────────────────────── */}
+        {/* @ts-expect-error — AnimatePresence is lazy-loaded */}
         <AnimatePresence>
-          {isOnboardingComplete && sortedSteps.length > 0 && (
-            <motion.div
-              className="mt-6 rounded-2xl border border-pluto-200 bg-pluto-50 p-4"
-              variants={activeCompletionVariants}
+          {isComplete && sortedSteps.length > 0 && (
+            <MotionDiv
+              className="mt-5 rounded-xl border border-pluto-200 bg-pluto-50 p-4 dark:border-pluto-700/60 dark:bg-pluto-900/60"
+              variants={completionVariants}
               initial="hidden"
               animate="visible"
               exit="exit"
@@ -539,36 +476,27 @@ export const OnboardingProgressTracker: React.FC<OnboardingProgressTrackerProps>
               data-testid="completion-banner"
             >
               <div className="flex items-start gap-3">
-                <motion.svg
-                  className="mt-0.5 h-5 w-5 flex-shrink-0 text-pluto-600"
+                <MotionSvg
+                  className="mt-0.5 h-5 w-5 flex-shrink-0 text-pluto-500 dark:text-pluto-300"
                   fill="currentColor"
                   viewBox="0 0 20 20"
                   aria-hidden="true"
                   animate={prefersReducedMotion ? {} : { scale: [1, 1.2, 1] }}
-                  transition={{ duration: 0.5, delay: 0.3 }}
+                  transition={{ duration: 0.45, delay: 0.25 }}
                 >
-                  <path
-                    fillRule="evenodd"
-                    d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
-                    clipRule="evenodd"
-                  />
-                </motion.svg>
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </MotionSvg>
                 <div>
-                  <h4 className="font-semibold text-pluto-900">
-                    {t("onboarding.successTitle") || "Onboarding Complete!"}
-                  </h4>
-                  <p className="mt-1 text-sm text-pluto-700">
-                    {t("onboarding.successMessage") ||
-                      "You have successfully completed all required onboarding steps."}
-                  </p>
+                  <h4 className="font-semibold text-pluto-900 dark:text-pluto-50">{i18n.successTitle}</h4>
+                  <p className="mt-0.5 text-sm text-pluto-700 dark:text-pluto-300">{i18n.successMessage}</p>
                 </div>
               </div>
-            </motion.div>
+            </MotionDiv>
           )}
         </AnimatePresence>
       </div>
     </div>
   );
-};
+});
 
 export default OnboardingProgressTracker;

@@ -563,6 +563,109 @@ describe("Dark Mode Theme Engine", () => {
       expect(screen.getByTestId("theme")).toHaveTextContent("light");
     });
   });
+
+  it("optimistically updates the document class before localStorage persists", async () => {
+    renderDarkMode({ defaultTheme: "light" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("is-mounted")).toHaveTextContent("true");
+    });
+
+    fireEvent.click(screen.getByText("Set Dark"));
+
+    await waitFor(() => {
+      expect(globalThis.document.documentElement.classList.add).toHaveBeenCalledWith("dark");
+      expect(globalThis.localStorage.setItem).toHaveBeenCalledWith("merchant-theme-preference", "dark");
+    });
+
+    const removeCallOrder = (globalThis.document.documentElement.classList.remove as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const addCallOrder = (globalThis.document.documentElement.classList.add as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    const storageCallOrder = (globalThis.localStorage.setItem as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+
+    expect(addCallOrder).toBeLessThan(storageCallOrder);
+  });
+
+  it("applies document class update on rollback when persist fails", async () => {
+    const mockSetItem = globalThis.localStorage.setItem as ReturnType<typeof vi.fn>;
+    mockSetItem.mockImplementation(() => {
+      throw new Error("Storage error");
+    });
+
+    renderDarkMode({ defaultTheme: "light" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("is-mounted")).toHaveTextContent("true");
+    });
+
+    fireEvent.click(screen.getByText("Set Dark"));
+
+    await waitFor(() => {
+      expect(globalThis.document.documentElement.classList.add).toHaveBeenCalledWith("light");
+      expect(screen.getByTestId("error")).toHaveTextContent("Storage error");
+    });
+  });
+
+  it("sets error and maintains current theme when localStorage.setItem throws after multiple toggles", async () => {
+    const mockSetItem = globalThis.localStorage.setItem as ReturnType<typeof vi.fn>;
+    let failNext = false;
+    mockSetItem.mockImplementation((key: string, value: string) => {
+      if (failNext) {
+        throw new Error("Storage full");
+      }
+    });
+
+    renderDarkMode({ defaultTheme: "light" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("is-mounted")).toHaveTextContent("true");
+    });
+
+    fireEvent.click(screen.getByText("Set Dark"));
+    await waitFor(() => {
+      expect(screen.getByTestId("theme")).toHaveTextContent("dark");
+    });
+
+    failNext = true;
+    fireEvent.click(screen.getByText("Set Light"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("error")).toHaveTextContent("Storage full");
+      expect(screen.getByTestId("theme")).toHaveTextContent("dark");
+    });
+  });
+
+  it("clears error on successful theme set after a failure", async () => {
+    const mockSetItem = globalThis.localStorage.setItem as ReturnType<typeof vi.fn>;
+    let shouldFail = true;
+    mockSetItem.mockImplementation(() => {
+      if (shouldFail) {
+        throw new Error("Temporary error");
+      }
+    });
+
+    renderDarkMode({ defaultTheme: "light" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("is-mounted")).toHaveTextContent("true");
+    });
+
+    fireEvent.click(screen.getByText("Set Dark"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("error")).toHaveTextContent("Temporary error");
+    });
+
+    shouldFail = false;
+    fireEvent.click(screen.getByText("Set Light"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("error")).toHaveTextContent("no-error");
+      expect(screen.getByTestId("theme")).toHaveTextContent("light");
+    });
+  });
 });
 
 describe("Error Cases", () => {

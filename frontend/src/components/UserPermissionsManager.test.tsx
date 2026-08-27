@@ -7,7 +7,7 @@ import { usePermissionsStore } from "@/hooks/usePermissionsStore";
 import { toast } from "sonner";
 
 vi.mock("next-intl", () => ({
-  useTranslations: () => (key: string) => key,
+  useTranslations: (namespace: string) => (key: string) => `${namespace}.${key}`,
 }));
 
 vi.mock("sonner", () => ({
@@ -29,13 +29,13 @@ const basePermissions = [
 describe("UserPermissionsManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    usePermissionsStore.setState({ permissions: basePermissions });
+    usePermissionsStore.setState({ permissions: basePermissions, isHydrated: true });
   });
 
   it("renders manager region and permissions", () => {
     render(<UserPermissionsManager userId="u1" showCategories={false} />);
 
-    expect(screen.getByRole("region", { name: "permissions.manager" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "manager" })).toBeInTheDocument();
     expect(screen.getByLabelText("Create Payments")).toBeInTheDocument();
   });
 
@@ -86,16 +86,16 @@ describe("UserPermissionsManager", () => {
 
     const checkbox = screen.getByLabelText("Create Payments") as HTMLInputElement;
     expect(checkbox.disabled).toBe(true);
-    expect(screen.getByText("permissions.readOnlyNotice")).toBeInTheDocument();
+    expect(screen.getByText("readOnlyNotice")).toBeInTheDocument();
   });
 
   it("adds accessible grouping metadata for category sections", async () => {
     render(<UserPermissionsManager userId="u1" showCategories />);
 
-    const toggle = screen.getByRole("button", { name: /permissions.category.payment/i });
+    const toggle = screen.getByRole("button", { name: /category.payment/i });
     expect(toggle).toHaveAttribute("aria-controls", "category-payment");
 
-    const region = screen.getByRole("region", { name: /permissions.category.payment/i });
+    const region = screen.getByRole("region", { name: /category.payment/i });
     expect(region).toHaveAttribute("id", "category-payment");
   });
 });

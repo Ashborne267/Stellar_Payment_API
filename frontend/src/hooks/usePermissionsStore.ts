@@ -12,6 +12,8 @@ export interface Permission {
 
 interface PermissionsState {
   permissions: Permission[];
+  isHydrated: boolean;
+  setHydrated: () => void;
   setPermissions: (permissions: Permission[]) => void;
   togglePermission: (id: string) => void;
   getPermissionsByCategory: (category: Permission["category"]) => Permission[];
@@ -21,6 +23,7 @@ interface PermissionsState {
 export const usePermissionsStore = create<PermissionsState>()(
   persist(
     (set, get) => ({
+      isHydrated: false,
       permissions: [
         {
           id: "payment-read",
@@ -66,6 +69,8 @@ export const usePermissionsStore = create<PermissionsState>()(
         },
       ],
 
+      setHydrated: () => set({ isHydrated: true }),
+
       setPermissions: (permissions) => set({ permissions }),
 
       togglePermission: (id) =>
@@ -90,6 +95,10 @@ export const usePermissionsStore = create<PermissionsState>()(
     }),
     {
       name: "user-permissions-storage",
+      onRehydrateStorage: () => (state) => {
+        state?.setHydrated();
+      },
+      partialize: (state) => ({ permissions: state.permissions }),
     }
   )
 );

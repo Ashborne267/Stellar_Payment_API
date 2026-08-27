@@ -33,6 +33,12 @@ import {
   findAnyRecentPayment,
   verifyTransactionSignature,
 } from "./stellar.js";
+import {
+  validatePaymentRecord,
+  sanitizePaymentMetadata,
+  auditPaymentAnomaly,
+  isValidTransactionHash,
+} from "./ledger-monitor-security.js";
 import { sendWebhook, isEventSubscribed } from "./webhooks.js";
 import { sendReceiptEmail } from "./email.js";
 import { renderReceiptEmail } from "./email-templates.js";
@@ -46,7 +52,87 @@ import {
   ledgerMonitorCycleDuration,
   ledgerMonitorPaymentsChecked,
   ledgerMonitorCircuitBreakerTrips,
+  ledgerMonitorBatchSize,
+  ledgerMonitorRateLimiterWaitSeconds,
+  ledgerMonitorValidationFailures,
+  ledgerMonitorAnomaliesDetected,
+  ledgerMonitorMerchantCacheHits,
+  ledgerMonitorMerchantCacheMisses,
+  ledgerMonitorMerchantCacheSize,
+  ledgerMonitorSignatureVerifications,
+  ledgerMonitorHorizonOperations,
+  rateLimitRequestsTotal,
+  rateLimitExceededTotal,
 } from "./metrics.js";
+
+// ── Merchant Config Cache ──────────────────────────────────────────────────────
+
+/**
+ * Robust in-memory LRU cache for merchant notification configs.
+ * Reduces duplicate DB lookups across poll cycles and within a single cycle.
+ */
+class MerchantConfigCache {
+  constructor(maxEntries = 1000, ttlMs = 5 * 60 * 1000) {
+    this.maxEntries = maxEntries;
+    this.ttlMs = ttlMs;
+    this.cache = new Map();
+  }
+
+  get(merchantId) {
+    const entry = this.cache.get(merchantId);
+    if (!entry) {
+      ledgerMonitorMerchantCacheMisses.inc();
+      return null;
+    }
+    if (Date.now() - entry.insertedAt > this.ttlMs) {
+      this.cache.delete(merchantId);
+      ledgerMonitorMerchantCacheMisses.inc();
+      return null;
+    }
+    // LRU touch
+    this.cache.delete(merchantId);
+    this.cache.set(merchantId, entry);
+    ledgerMonitorMerchantCacheHits.inc();
+    return entry.data;
+  }
+
+  set(merchantId, data) {
+    if (this.cache.has(merchantId)) {
+      this.cache.delete(merchantId);
+    }
+    if (this.cache.size >= this.maxEntries) {
+      const oldest = this.cache.keys().next().value;
+      this.cache.delete(oldest);
+    }
+    this.cache.set(merchantId, { data, insertedAt: Date.now() });
+    ledgerMonitorMerchantCacheSize.set(this.cache.size);
+  }
+
+  invalidate(merchantId) {
+    if (merchantId) {
+      this.cache.delete(merchantId);
+      return;
+    }
+    this.cache.clear();
+  }
+
+  getStats() {
+    return {
+      size: this.cache.size,
+      maxEntries: this.maxEntries,
+      ttlMs: this.ttlMs,
+    };
+  }
+}
+
+const merchantConfigCache = new MerchantConfigCache();
+
+export function getMerchantConfigCacheStats() {
+  return merchantConfigCache.getStats();
+}
+
+/** Prometheus label set identifying the Ledger Monitor's Horizon rate limiter. */
+const RATE_LIMIT_LABELS = { endpoint: "ledger_monitor", type: "horizon" };
 
 // ── Tuning constants ──────────────────────────────────────────────────────────
 
@@ -122,11 +208,17 @@ export function getPollerHealth() {
     _circuitBreakerOpenAt > 0 &&
     Date.now() - _circuitBreakerOpenAt < CIRCUIT_BREAKER_RESET_MS;
 
+  const rateLimitedRequests =
+    typeof _rateLimiter.stats === "function"
+      ? _rateLimiter.stats().rateLimitedRequests
+      : 0;
+
   return {
     consecutiveFailures: _consecutiveFailures,
     circuitBreakerOpen,
     backoffIndex: _backoffIndex,
     horizonRequestsPerSecond: _rateLimiter.maxPerSecond,
+    rateLimitedRequests,
   };
 }
 
@@ -158,6 +250,9 @@ export function createLedgerMonitorRateLimiter({
   const safeBurst = Math.max(1, Number(burst) || safeMax);
   let tokens = safeBurst;
   let lastRefillAt = now();
+  // Number of requests that were throttled (had to wait for a token). Surfaced
+  // via stats() and getPollerHealth() for observability.
+  let rateLimitedRequests = 0;
 
   function refill() {
     const current = now();
@@ -169,24 +264,33 @@ export function createLedgerMonitorRateLimiter({
   return {
     maxPerSecond: safeMax,
     async waitForSlot() {
+      rateLimitRequestsTotal.inc(RATE_LIMIT_LABELS);
       refill();
       if (tokens >= 1) {
         tokens -= 1;
         return;
       }
 
+      // No token available — this request is being throttled.
+      rateLimitExceededTotal.inc(RATE_LIMIT_LABELS);
+      rateLimitedRequests += 1;
       const delayMs = Math.ceil(((1 - tokens) / safeMax) * 1000);
       logger.warn(
-        { delayMs, maxPerSecond: safeMax },
+        { delayMs, maxPerSecond: safeMax, rateLimitedRequests },
         "Horizon poller: rate limit reached — delaying Horizon request",
       );
       await sleepFn(delayMs);
+      ledgerMonitorRateLimiterWaitSeconds.observe(delayMs / 1000);
       refill();
       tokens = Math.max(0, tokens - 1);
+    },
+    stats() {
+      return { rateLimitedRequests, maxPerSecond: safeMax };
     },
     reset() {
       tokens = safeBurst;
       lastRefillAt = now();
+      rateLimitedRequests = 0;
     },
   };
 }
@@ -260,6 +364,8 @@ async function pollPendingPayments() {
       _backoffIndex = 0;
     }
 
+    ledgerMonitorBatchSize.set(pending?.length ?? 0);
+
     if (!pending || pending.length === 0) return;
 
     logger.info({ count: pending.length }, "Horizon poller: checking pending payments");
@@ -274,22 +380,30 @@ async function pollPendingPayments() {
       groups.get(key).push(p);
     }
 
-    // Process each group sequentially, different groups in parallel
-    const merchantConfigCache = new Map();
-    await Promise.allSettled(
+    // Pre-load every merchant notification config for this batch in a single
+    // query, replacing the previous N+1 pattern (one merchants lookup per
+    // confirmed payment). Seeds the per-cycle cache consumed by checkPayment.
+    const cycleCache = await preloadMerchantConfigs(pending);
+    const results = await Promise.allSettled(
       Array.from(groups.values()).map(async (group) => {
         for (const p of group) {
-          await checkPayment(p, { merchantConfigCache });
+          await checkPayment(p, { merchantConfigCache: cycleCache });
         }
       })
     );
 
-    // Record metrics for payment check results
-    results.forEach((result) => {
-      if (result.status === 'rejected') {
-        logger.warn({ err: result.reason }, "Horizon poller: payment group processing failed");
+    // Record metrics for payment check results. `checkPayment` isolates its own
+    // errors, so a rejected group here is unexpected — surface it instead of
+    // letting it disappear (the previous code referenced an undefined
+    // `results`, throwing a ReferenceError that aborted the cycle every time).
+    for (const result of results) {
+      if (result.status === "rejected") {
+        logger.warn(
+          { err: result.reason },
+          "Horizon poller: payment group processing failed",
+        );
       }
-    });
+    }
 
   } catch (err) {
     logger.warn({ err }, "Horizon poller: unexpected error in poll cycle");
@@ -304,15 +418,21 @@ async function pollPendingPayments() {
 
 async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
   try {
-    // Guard: skip if essential fields are missing
-    if (!payment.asset || !payment.recipient) {
+    // Guard: full security validation on the DB record before touching Horizon
+    const validation = validatePaymentRecord(payment);
+    if (!validation.valid) {
+      ledgerMonitorValidationFailures.inc({ reason: deriveValidationReasonTag(validation.reason) });
       logger.warn(
-        { paymentId: payment.id },
-        "Horizon poller: skipping payment with missing asset or recipient",
+        { paymentId: payment?.id, reason: validation.reason },
+        "Horizon poller: payment record failed security validation — skipping",
       );
       ledgerMonitorPaymentsChecked.inc({ result: "skipped" });
       return;
     }
+
+    // Emit audit event for any anomalous field values and track per-type counts
+    auditPaymentAnomaly(payment);
+    recordAnomalyMetrics(payment);
 
     let match;
     try {
@@ -384,13 +504,13 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
             () => supabase.from("payments").update({
               status: "failed",
               tx_id: anyPayment.transaction_hash,
-              metadata: {
+              metadata: sanitizePaymentMetadata({
                 ...(payment.metadata || {}),
                 failure_reason: "underpayment",
                 expected_amount: expected,
                 received_amount: received,
                 shortfall: Number((expected - received).toFixed(7)),
-              },
+              }),
             }).eq("id", payment.id).eq("status", "pending"),
             { paymentId: payment.id, operation: "markUnderpaymentFailed" },
           );
@@ -402,20 +522,22 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
           );
           ledgerMonitorPaymentsChecked.inc({ result: "failed" });
 
-          streamManager.notify(payment.id, "payment.failed", {
-            status: "failed",
-            reason: "underpayment",
-            expected_amount: expected,
-            received_amount: received,
-          });
-          if (_io && payment.merchant_id) {
-            _io.to(`merchant:${payment.merchant_id}`).emit("payment:failed", {
+          notifyPaymentEvent(payment, {
+            sseEvent: "payment.failed",
+            sseData: {
+              status: "failed",
+              reason: "underpayment",
+              expected_amount: expected,
+              received_amount: received,
+            },
+            socketEvent: "payment:failed",
+            socketData: {
               id: payment.id,
               reason: "underpayment",
               expected_amount: expected,
               received_amount: received,
-            });
-          }
+            },
+          });
         } else if (diff > 0.0000001) {
           // Overpayment — confirm but flag
           const latencySeconds = (Date.now() - new Date(payment.created_at).getTime()) / 1000;
@@ -424,13 +546,13 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
               status: "confirmed",
               tx_id: anyPayment.transaction_hash,
               completion_duration_seconds: Math.floor(latencySeconds),
-              metadata: {
+              metadata: sanitizePaymentMetadata({
                 ...(payment.metadata || {}),
                 overpayment: true,
                 expected_amount: expected,
                 received_amount: received,
                 excess: Number((received - expected).toFixed(7)),
-              },
+              }),
             }).eq("id", payment.id).eq("status", "pending").is("tx_id", null).select("id").maybeSingle(),
             { paymentId: payment.id, operation: "confirmOverpayment" },
           );
@@ -443,20 +565,32 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
             "Horizon poller: overpayment — confirmed with flag",
           );
           ledgerMonitorPaymentsChecked.inc({ result: "confirmed" });
-          streamManager.notify(payment.id, "payment.confirmed", {
-            status: "confirmed",
-            tx_id: anyPayment.transaction_hash,
-            overpayment: true,
-          });
-          if (_io && payment.merchant_id) {
-            _io.to(`merchant:${payment.merchant_id}`).emit("payment:confirmed", {
+          notifyPaymentEvent(payment, {
+            sseEvent: "payment.confirmed",
+            sseData: {
+              status: "confirmed",
+              tx_id: anyPayment.transaction_hash,
+              overpayment: true,
+            },
+            socketEvent: "payment:confirmed",
+            socketData: {
               id: payment.id,
               tx_id: anyPayment.transaction_hash,
               overpayment: true,
-            });
-          }
+            },
+          });
         }
       }
+      return;
+    }
+
+    // Guard: validate the transaction hash returned from Horizon before using it
+    if (!isValidTransactionHash(match.transaction_hash)) {
+      logger.warn(
+        { paymentId: payment.id, txHash: match.transaction_hash },
+        "Horizon poller: Horizon returned an invalid transaction hash — skipping",
+      );
+      ledgerMonitorPaymentsChecked.inc({ result: "skipped" });
       return;
     }
 
@@ -535,15 +669,15 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
     );
     ledgerMonitorPaymentsChecked.inc({ result: "confirmed" });
 
-    // SSE → customer checkout page
-    streamManager.notify(payment.id, "payment.confirmed", {
-      status: "confirmed",
-      tx_id: match.transaction_hash,
-    });
-
-    // Socket.io → merchant dashboard
-    if (_io && payment.merchant_id) {
-      _io.to(`merchant:${payment.merchant_id}`).emit("payment:confirmed", {
+    // SSE (customer checkout page) + Socket.io (merchant dashboard)
+    notifyPaymentEvent(payment, {
+      sseEvent: "payment.confirmed",
+      sseData: {
+        status: "confirmed",
+        tx_id: match.transaction_hash,
+      },
+      socketEvent: "payment:confirmed",
+      socketData: {
         id: payment.id,
         amount: payment.amount,
         asset: payment.asset,
@@ -551,8 +685,8 @@ async function checkPayment(payment, { merchantConfigCache = new Map() } = {}) {
         recipient: payment.recipient,
         tx_id: match.transaction_hash,
         confirmed_at: new Date().toISOString(),
-      });
-    }
+      },
+    });
 
     // Webhook
     const merchant = await loadMerchantNotificationConfig(payment.merchant_id, merchantConfigCache);
@@ -612,6 +746,18 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Notify both the customer (SSE) and merchant dashboard (Socket.io) of a
+ * payment status change. Consolidates the confirm/fail/overpayment emit
+ * pattern that was previously duplicated at each call site.
+ */
+function notifyPaymentEvent(payment, { sseEvent, sseData, socketEvent, socketData }) {
+  streamManager.notify(payment.id, sseEvent, sseData);
+  if (_io && payment.merchant_id) {
+    _io.to(`merchant:${payment.merchant_id}`).emit(socketEvent, socketData);
+  }
+}
+
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -638,6 +784,7 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
       { paymentId, txHash, operation: "verifyTransactionSignature" },
     );
   } catch (sigErr) {
+    ledgerMonitorSignatureVerifications.inc({ result: "error" });
     logger.warn(
       { err: sigErr, paymentId, txHash },
       "Horizon poller: unexpected error during signature verification — skipping payment",
@@ -646,6 +793,7 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
   }
 
   if (!sigResult?.valid) {
+    ledgerMonitorSignatureVerifications.inc({ result: "failed" });
     logger.warn(
       {
         paymentId,
@@ -660,12 +808,14 @@ async function verifyLedgerTransactionSignature(txHash, paymentId) {
     return false;
   }
 
+  ledgerMonitorSignatureVerifications.inc({ result: "passed" });
   logger.debug(
     {
       paymentId,
       txHash,
       isMultiSig: sigResult.isMultiSig,
       signatureCount: sigResult.signatureCount,
+      isFeeBump: sigResult.isFeeBump ?? false,
     },
     "Horizon poller: signature verification passed",
   );
@@ -728,6 +878,77 @@ async function safeInvalidatePaymentCache(paymentId) {
   }
 }
 
+/**
+ * Pre-load merchant notification configs for an entire pending batch in one
+ * `IN (...)` query, seeding the per-cycle cache. This collapses the previous
+ * N+1 access pattern (one `merchants` lookup per confirmed payment) into a
+ * single round-trip and removes the cross-group race on first lookup.
+ *
+ * Fully defensive: any failure returns an empty cache, so callers transparently
+ * fall back to per-payment lookups via {@link loadMerchantNotificationConfig}.
+ *
+ * @param {Array<{ merchant_id?: string }>} payments
+ * @returns {Promise<Map<string, object|null>>}
+ */
+async function preloadMerchantConfigs(payments) {
+  const cache = new Map();
+  try {
+    const merchantIds = [
+      ...new Set((payments ?? []).map((p) => p.merchant_id).filter(Boolean)),
+    ];
+    if (merchantIds.length === 0) return cache;
+
+    const cached = [];
+    const toFetch = [];
+    for (const id of merchantIds) {
+      const entry = merchantConfigCache.get(id);
+      if (entry) {
+        cached.push({ id, entry });
+      } else {
+        toFetch.push(id);
+      }
+    }
+
+    for (const { id, entry } of cached) {
+      cache.set(id, entry);
+    }
+
+    if (toFetch.length > 0) {
+      const { data, error } = await supabase
+        .from("merchants")
+        .select(`id, ${MERCHANT_NOTIFICATION_FIELDS}`)
+        .in("id", toFetch);
+
+      if (error) {
+        logger.warn(
+          { err: error, merchantCount: toFetch.length },
+          "Horizon poller: batch merchant preload failed — falling back to per-payment lookups",
+        );
+        return cache;
+      }
+
+      for (const merchant of data ?? []) {
+        merchantConfigCache.set(merchant.id, merchant);
+        cache.set(merchant.id, merchant);
+      }
+      for (const id of toFetch) {
+        if (!cache.has(id)) {
+          merchantConfigCache.set(id, null);
+          cache.set(id, null);
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Horizon poller: batch merchant preload errored — falling back to per-payment lookups",
+    );
+    merchantConfigCache.invalidate(null);
+    return new Map();
+  }
+  return cache;
+}
+
 async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
   if (!merchantId) {
     return null;
@@ -735,6 +956,12 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
 
   if (cache.has(merchantId)) {
     return cache.get(merchantId);
+  }
+
+  const merchant = merchantConfigCache.get(merchantId);
+  if (merchant !== null && merchant !== undefined) {
+    cache.set(merchantId, merchant);
+    return merchant;
   }
 
   const { data, error } = await supabase
@@ -749,10 +976,66 @@ async function loadMerchantNotificationConfig(merchantId, cache = new Map()) {
       "Horizon poller: failed to load merchant notification config",
     );
     cache.set(merchantId, null);
+    merchantConfigCache.set(merchantId, null);
     return null;
   }
 
-  const merchant = data ?? null;
-  cache.set(merchantId, merchant);
-  return merchant;
+  const result = data ?? null;
+  cache.set(merchantId, result);
+  merchantConfigCache.set(merchantId, result);
+  return result;
+}
+
+/**
+ * Derive a short, label-safe tag from a validation failure reason string.
+ * Keeps Prometheus label cardinality bounded to a fixed set.
+ */
+function deriveValidationReasonTag(reason) {
+  if (!reason) return "unknown";
+  const r = reason.toLowerCase();
+  if (r.includes("recipient")) return "bad_recipient";
+  if (r.includes("amount")) return "bad_amount";
+  if (r.includes("issuer")) return "bad_issuer";
+  if (r.includes("asset")) return "bad_asset";
+  if (r.includes("memo")) return "bad_memo";
+  if (r.includes("future") || r.includes("created_at")) return "bad_date";
+  if (r.includes("id")) return "missing_id";
+  return "other";
+}
+
+/**
+ * Emit per-type anomaly metrics for a payment record.
+ * Mirrors the anomaly detection logic in auditPaymentAnomaly without
+ * duplicating the logger.warn calls — only the metric increments live here.
+ */
+function recordAnomalyMetrics(payment) {
+  const amount = Number(payment.amount);
+  if (amount > 100_000) {
+    ledgerMonitorAnomaliesDetected.inc({ type: "large_amount" });
+  }
+  if (typeof payment.memo === "string") {
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(payment.memo)) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "memo_control_chars" });
+    }
+    if (payment.memo.includes("'") || payment.memo.includes('"') || payment.memo.includes("--")) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "memo_sql_chars" });
+    }
+  }
+  if (payment.created_at) {
+    const ageHours = (Date.now() - Date.parse(payment.created_at)) / 3_600_000;
+    if (ageHours > 20) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "stale_payment" });
+    }
+  }
+  if (payment.metadata && typeof payment.metadata === "object") {
+    const METADATA_ALLOWLIST = new Set([
+      "order_id", "customer_id", "reference", "invoice_id", "external_id",
+      "failure_reason", "expected_amount", "received_amount", "shortfall",
+      "excess", "overpayment", "note",
+    ]);
+    const unknownKeys = Object.keys(payment.metadata).filter((k) => !METADATA_ALLOWLIST.has(k));
+    if (unknownKeys.length > 0) {
+      ledgerMonitorAnomaliesDetected.inc({ type: "metadata_unknown_keys" });
+    }
+  }
 }

@@ -12,7 +12,7 @@ export const baseTransition: Transition = {
 };
 
 // Status dot animation variants
-export const statusDotVariants: Variants = {
+export const statusDotVariants = {
   online: {
     scale: [1, 1.2, 1],
     opacity: [0.8, 1, 0.8],
@@ -49,7 +49,7 @@ export const statusDotVariants: Variants = {
       ease: "linear",
     },
   },
-};
+} satisfies Variants;
 
 // Pulse animation for status indicators
 export const pulseVariants: Variants = {
@@ -156,7 +156,7 @@ export const refreshButtonVariants: Variants = {
 };
 
 // Latency indicator animation variants
-export const latencyVariants: Variants = {
+export const latencyVariants = {
   good: {
     color: "rgb(34, 197, 94)",
     scale: 1,
@@ -179,10 +179,10 @@ export const latencyVariants: Variants = {
       ease: "easeInOut",
     },
   },
-};
+} satisfies Variants;
 
 // Connection quality indicator animation
-export const connectionQualityVariants: Variants = {
+export const connectionQualityVariants = {
   excellent: {
     backgroundColor: "rgb(34, 197, 94)",
     width: "100%",
@@ -203,7 +203,7 @@ export const connectionQualityVariants: Variants = {
     width: "25%",
     transition: { type: "spring", stiffness: 80, damping: 15 },
   },
-};
+} satisfies Variants;
 
 // Error message animation variants
 export const errorMessageVariants: Variants = {
@@ -421,14 +421,14 @@ export const latencyBarVariants: Variants = {
 };
 
 // Animation utility functions
-export const getLatencyVariant = (latency: number | null): keyof typeof latencyVariants => {
+export const getLatencyVariant = (latency: number | null): "good" | "warning" | "bad" => {
   if (latency === null) return "good";
   if (latency < 100) return "good";
   if (latency < 300) return "warning";
   return "bad";
 };
 
-export const getConnectionQualityVariant = (latency: number | null): keyof typeof connectionQualityVariants => {
+export const getConnectionQualityVariant = (latency: number | null): "excellent" | "good" | "fair" | "poor" => {
   if (latency === null) return "poor";
   if (latency < 50) return "excellent";
   if (latency < 150) return "good";
@@ -436,9 +436,9 @@ export const getConnectionQualityVariant = (latency: number | null): keyof typeo
   return "poor";
 };
 
-export const getStatusDotVariant = (status: string): keyof typeof statusDotVariants => {
-  const validStatuses = ["online", "offline", "slow", "checking"];
-  return validStatuses.includes(status) ? status as keyof typeof statusDotVariants : "checking";
+export const getStatusDotVariant = (status: string): "online" | "offline" | "slow" | "checking" => {
+  const validStatuses = ["online", "offline", "slow", "checking"] as const;
+  return validStatuses.includes(status as typeof validStatuses[number]) ? status as "online" | "offline" | "slow" | "checking" : "checking";
 };
 
 // Animation hooks for reduced motion support
@@ -448,8 +448,9 @@ export const useReducedMotion = () => {
 };
 
 // Adaptive transition configuration
-export const getAdaptiveTransition = (baseTransition: Transition): Transition => {
-  if (useReducedMotion()) {
+export const getAdaptiveTransition = (baseTransition: Transition, reducedMotion?: boolean): Transition => {
+  const shouldReduce = reducedMotion ?? (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  if (shouldReduce) {
     return {
       ...baseTransition,
       duration: 0.1,

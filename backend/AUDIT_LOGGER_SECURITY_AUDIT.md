@@ -1,47 +1,45 @@
 # Audit Logger Security Audit
 
-Date: 2026-04-24
-Scope: `backend/src/lib/audit.js`, `backend/src/services/auditService.js`, audit log persistence path
+Date: 2026-06-26
+Scope: `backend/src/lib/audit.js`, `backend/src/services/auditService.js`, `backend/src/lib/audit-security.js`, audit log persistence path
 
-## Findings
+## Findings & Mitigations
 
-1. Unbounded write volume risk
-- Risk: repeated login/event writes can flood `audit_logs` and degrade DB performance.
-- Mitigation implemented: in-memory per-key fixed-window rate limiting.
-- Key shape: `merchantId:action:ipAddress`.
+### 1. Unbounded Write Volume Risk
+* **Risk**: Repeated login/event writes can flood the `audit_logs` database table and degrade database performance.
+* **Mitigation**: Implemented in-memory, per-key fixed-window rate limiting (key shape: `merchantId:action:ipAddress`).
 
-2. Sensitive field leakage risk
-- Risk: audit metadata fields can accidentally include secrets or keys.
-- Mitigation implemented: sensitive key redaction (`secret`, `token`, `password`, `api_key`, `authorization`, `signature`) and value sanitization with bounded length.
+### 2. Sensitive Field Leakage Risk
+* **Risk**: Audit metadata fields can accidentally include sensitive data like secrets, credentials, or API keys.
+* **Mitigation**: Implemented regex-based sensitive key redaction (`secret`, `token`, `password`, `api_key`, `authorization`, `signature`) and value sanitization with bounded lengths.
 
-3. Tamper-evidence gap
-- Risk: stored audit records had no integrity marker.
-- Mitigation implemented: `payload_hash` (SHA-256 over canonical payload) and optional `signature` (HMAC-SHA256 when `AUDIT_LOG_SIGNING_SECRET` is configured).
+### 3. Tamper-Evidence Gap
+* **Risk**: Stored audit records had no integrity markers, making undetected modifications possible.
+* **Mitigation**: Added `payload_hash` (SHA-256 over canonical payload) and optional `signature` (HMAC-SHA256) when `AUDIT_LOG_SIGNING_SECRET` is configured.
+
+### 4. Rate Limiter Memory Exhaustion / Denial of Service (DoS)
+* **Risk**: An attacker performing dictionary attacks using randomized keys (e.g. varying IP addresses or merchant IDs) could cause the in-memory rate limiting `Map` to grow indefinitely, leading to memory exhaustion and server OOM crashes.
+* **Mitigation**: Added automatic eviction to `consumeAuditLogRateLimit`. When the `Map` size exceeds 10,000 entries, expired records are immediately purged. If the map remains full, a hard-cap eviction removes the oldest keys.
+
+### 5. Recursion Stack Overflow / Crash
+* **Risk**: If a logged metadata object has circular references or deep recursion, the standard stringifier will trigger a stack overflow (`RangeError: Maximum call stack size exceeded`), crashing the application process.
+* **Mitigation**: Hardened `stableStringify` by tracking visited objects using a `WeakSet` (circular reference detection) and enforcing a maximum recursion depth cap of 10.
+
+### 6. Integrity Verification Retrieval Gap
+* **Risk**: Cryptographic hashes and signatures were written to the database but never verified upon retrieval, failing to alert administrators of tampered audit logs.
+* **Mitigation**: Implemented `verifyRowIntegrity` and integrated it into the `getAuditLogs` database retrieval pipeline. Each row now includes an `integrity_status` string ("verified", "unsigned_verified", or "failed").
 
 ## Hardening Changes Applied
 
-- Added `payload_hash` and `signature` columns to `audit_logs` via migration.
-- Added canonical payload hashing/signing helpers in `backend/src/lib/audit-security.js`.
-- Applied sanitization + signing to:
-  - `logLoginAttempt` in `backend/src/lib/audit.js`
-  - `auditService.logEvent` in `backend/src/services/auditService.js`
-- Added write throttling to both login and generic event audit paths.
+* Added automatic eviction and memory bounds to `consumeAuditLogRateLimit`.
+* Added recursion depth and circular reference protections to `stableStringify`.
+* Created `verifyRowIntegrity` and `reconstructPayloadFromRow` helpers.
+* Integrated inline integrity checking in `getAuditLogs` and updated the REST API output to include `integrity_status`.
+* Wrote 100% unit and integration test coverage for all new security mechanisms.
 
 ## Validation
 
-Automated tests added:
-- `backend/src/lib/audit-security.test.js`
-- `backend/src/services/auditService.test.js`
-- Updated `backend/src/lib/audit.test.js`
-
-Focused suite result:
-- `32 passed / 32 total` for impacted security and auth test files.
-
-## Operational Notes
-
-Recommended environment variables:
-- `AUDIT_LOG_SIGNING_SECRET=<strong-random-secret>`
-- `AUDIT_LOG_RATE_LIMIT_MAX=60`
-- `AUDIT_LOG_RATE_LIMIT_WINDOW_MS=60000`
-
-If `AUDIT_LOG_SIGNING_SECRET` is unset, `signature` will be `NULL` and `payload_hash` remains available.
+Automated tests added and verified:
+* `backend/src/lib/audit-security.test.js`
+* `backend/src/services/auditService.test.js`
+* `backend/src/lib/audit.test.js`

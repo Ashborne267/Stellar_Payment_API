@@ -1,8 +1,8 @@
 ﻿"use client";
 
-import { useEffect, useId, useRef, useState, useCallback, useMemo, useReducer } from "react";
+import { useEffect, useId, useRef, useCallback, useMemo, useReducer } from "react";
 import { useLocale, useTranslations } from "next-intl";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, type Variants } from "framer-motion";
 import * as Recharts from "recharts";
 const {
   CartesianGrid,
@@ -37,11 +37,7 @@ interface VolumeResponse {
 }
 
 interface MetricsResponse {
-  data: Array<{
-    date: string;
-    volume: number;
-    count: number;
-  }>;
+  data: Array<{ date: string; volume: number; count: number }>;
   total_volume: number;
   total_payments: number;
   confirmed_count: number;
@@ -138,7 +134,7 @@ function metricsReducer(state: MetricsState, action: MetricsAction): MetricsStat
 
 // ── Animation Variants (Issue #784: Framer Motion animations) ────────────────
 
-const containerVariants = {
+const containerVariants: Variants = {
   hidden: { opacity: 0 },
   visible: {
     opacity: 1,
@@ -149,7 +145,7 @@ const containerVariants = {
   },
 };
 
-const cardVariants = {
+const cardVariants: Variants = {
   hidden: { opacity: 0, y: 20, scale: 0.95 },
   visible: {
     opacity: 1,
@@ -163,7 +159,7 @@ const cardVariants = {
   },
 };
 
-const chartVariants = {
+const chartVariants: Variants = {
   hidden: { opacity: 0, scale: 0.98 },
   visible: {
     opacity: 1,
@@ -177,12 +173,12 @@ const chartVariants = {
   },
 };
 
-const buttonVariants = {
+const buttonVariants: Variants = {
   hover: { scale: 1.05, transition: { duration: 0.2 } },
   tap: { scale: 0.95, transition: { duration: 0.1 } },
 };
 
-const assetToggleVariants = {
+const assetToggleVariants: Variants = {
   hidden: { opacity: 0, scale: 0.8 },
   visible: { opacity: 1, scale: 1 },
   exit: { opacity: 0, scale: 0.8, transition: { duration: 0.2 } },
@@ -601,6 +597,7 @@ export default function PaymentMetrics({
           )}
         </AnimatePresence>
 
+        {/* Asset toggles */}
         {assets.length > 0 && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -657,9 +654,7 @@ export default function PaymentMetrics({
         {densityData.length > 0 && <DensityGrid data={densityData} />}
 
         {assets.length === 0 ? (
-          <p className="py-12 text-center text-sm text-slate-500">
-            {t("noPayments")}
-          </p>
+          <p className="py-12 text-center text-sm text-slate-500">{t("noPayments")}</p>
         ) : (
           <>
             <table id={chartTableId} className="sr-only">
