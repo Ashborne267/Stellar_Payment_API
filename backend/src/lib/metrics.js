@@ -733,6 +733,65 @@ export const signatureVerificationReplayDetected = new client.Counter({
   help: "Total number of signature replay attempts detected",
 });
 
+/**
+ * Audit Logger Metrics
+ */
+
+export const auditLogWritesTotal = new client.Counter({
+  name: "audit_log_writes_total",
+  help: "Total number of audit log write attempts",
+  labelNames: ["source", "result"], // source: login_attempt, profile_change; result: success, failure, circuit_open
+});
+
+export const auditLogWriteDuration = new client.Histogram({
+  name: "audit_log_write_duration_seconds",
+  help: "Time taken to write an audit log record, including retries",
+  labelNames: ["source", "result"],
+  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5],
+});
+
+export const auditLogFallbackWritesTotal = new client.Counter({
+  name: "audit_log_fallback_writes_total",
+  help: "Total number of audit log entries written to the fallback file log",
+  labelNames: ["source"],
+});
+
+export const auditLogCircuitBreakerTrips = new client.Counter({
+  name: "audit_log_circuit_breaker_trips_total",
+  help: "Total number of times an audit log circuit breaker tripped open",
+  labelNames: ["source"],
+});
+
+export const auditLogCircuitBreakerState = new client.Gauge({
+  name: "audit_log_circuit_breaker_state",
+  help: "Current state of the audit log circuit breaker (0=closed, 1=open, 2=half_open)",
+  labelNames: ["source"],
+});
+
+export const auditLogReplayTotal = new client.Counter({
+  name: "audit_log_replay_total",
+  help: "Total number of fallback audit log lines processed during replay",
+  labelNames: ["result"], // result: success, failed
+});
+
+export const auditLogRateLimitRejectionsTotal = new client.Counter({
+  name: "audit_log_rate_limit_rejections_total",
+  help: "Total number of audit log operations rejected by the rate limiter",
+  labelNames: ["source"], // login_attempt, profile_change, read
+});
+
+export const auditLogReadRequestsTotal = new client.Counter({
+  name: "audit_log_read_requests_total",
+  help: "Total number of GET /api/audit-logs requests",
+  labelNames: ["result"], // success, rate_limited, error
+});
+
+export const auditLogIntegrityVerificationsTotal = new client.Counter({
+  name: "audit_log_integrity_verifications_total",
+  help: "Total number of audit log row integrity verifications performed on read",
+  labelNames: ["result"], // verified, unsigned_verified, failed
+});
+
 // Register custom metrics
 register.registerMetric(paymentCreatedCounter);
 register.registerMetric(paymentConfirmedCounter);
@@ -844,5 +903,14 @@ register.registerMetric(paymentMatchingErrors);
 register.registerMetric(signatureVerificationOperations);
 register.registerMetric(signatureVerificationLatency);
 register.registerMetric(signatureVerificationReplayDetected);
+register.registerMetric(auditLogWritesTotal);
+register.registerMetric(auditLogWriteDuration);
+register.registerMetric(auditLogFallbackWritesTotal);
+register.registerMetric(auditLogCircuitBreakerTrips);
+register.registerMetric(auditLogCircuitBreakerState);
+register.registerMetric(auditLogReplayTotal);
+register.registerMetric(auditLogRateLimitRejectionsTotal);
+register.registerMetric(auditLogReadRequestsTotal);
+register.registerMetric(auditLogIntegrityVerificationsTotal);
 
 export { register };
