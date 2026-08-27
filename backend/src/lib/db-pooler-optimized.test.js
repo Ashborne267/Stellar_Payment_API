@@ -45,6 +45,11 @@ vi.mock("./metrics.js", () => ({
   dbPoolerRateLimitExceeded: { inc: vi.fn() },
   dbPoolerQueryTotal: { inc: vi.fn() },
   dbPoolerSignatureVerified: { inc: vi.fn() },
+  dbPoolerQueryDuration: { observe: vi.fn() },
+  dbPoolerCircuitBreakerState: { set: vi.fn() },
+  dbPoolerFallbackModeActive: { set: vi.fn() },
+  dbPoolerActiveMerchantWindows: { set: vi.fn() },
+  dbPoolerRateLimitUtilizationPercent: { set: vi.fn() },
 }));
 
 vi.mock("./logger.js", () => ({
@@ -58,6 +63,14 @@ vi.mock("./logger.js", () => ({
 
 // ── Import after mocks ────────────────────────────────────────────────────────
 
+import {
+  dbPoolerQueryDuration,
+  dbPoolerCircuitBreakerState,
+  dbPoolerFallbackModeActive,
+  dbPoolerActiveMerchantWindows,
+  dbPoolerRateLimitUtilizationPercent,
+} from "./metrics.js";
+import { circuitBreaker as dbCircuitBreaker } from "./db.js";
 import {
   signQuery,
   verifyQuerySignature,
@@ -594,5 +607,126 @@ describe("Database Pooler - getPoolerStats with circuit breaker (Issue #895)", (
     expect(stats).toHaveProperty("fallbackMode");
     expect(stats.fallbackMode).toHaveProperty("active");
     expect(stats.fallbackMode).toHaveProperty("expiresAt");
+  });
+});
+
+// ── Granular metrics tracking (Issue #1058) ───────────────────────────────────
+
+describe("Database Pooler - Granular metrics tracking (Issue #1058)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queryRateLimiter.globalCount = 0;
+    queryRateLimiter.globalWindowStart = Date.now();
+    queryRateLimiter.merchantWindows.clear();
+    clearQueryCache();
+    _resetDbPoolerCircuitBreakerForTests();
+    // db.js has its own lower-level circuit breaker (threshold 5, guarding
+    // queryWithRetry) that earlier tests in this file trip and leave OPEN
+    // for a real 60s cooldown. Reset it so these tests observe the
+    // *pooler's* circuit breaker/fallback behavior in isolation.
+    dbCircuitBreaker.state = "CLOSED";
+    dbCircuitBreaker.failureCount = 0;
+    dbCircuitBreaker.lastFailureTime = null;
+    dbCircuitBreaker.successCount = 0;
+  });
+
+  it("observes query duration labeled by status on success", async () => {
+    mockPoolQuery.mockResolvedValueOnce({ rows: [{ id: 1 }], rowCount: 1 });
+
+    await optimizedQuery("SELECT 1", [], { label: "metrics-success", useCache: false });
+
+    expect(dbPoolerQueryDuration.observe).toHaveBeenCalledWith(
+      { label: "metrics-success", status: "success" },
+      expect.any(Number),
+    );
+  });
+
+  it("observes query duration labeled by status on rate-limit rejection", async () => {
+    queryRateLimiter.globalCount = queryRateLimiter.maxQueries;
+
+    await expect(optimizedQuery("SELECT 1", [], { label: "metrics-rl" })).rejects.toThrow();
+
+    expect(dbPoolerQueryDuration.observe).toHaveBeenCalledWith(
+      { label: "metrics-rl", status: "rate_limited" },
+      expect.any(Number),
+    );
+  });
+
+  it("observes query duration labeled by status on DB error", async () => {
+    mockPoolQuery.mockRejectedValue(new Error("boom"));
+
+    await expect(optimizedQuery("SELECT 1", [], { label: "metrics-error", useCache: false })).rejects.toThrow();
+
+    expect(dbPoolerQueryDuration.observe).toHaveBeenCalledWith(
+      { label: "metrics-error", status: "error" },
+      expect.any(Number),
+    );
+  });
+
+  it("publishes rate-limit utilization and active merchant window gauges on every check", async () => {
+    mockPoolQuery.mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
+
+    await optimizedQuery("SELECT 1", [], { label: "metrics-gauge", merchantId: "merchant-x", useCache: false });
+
+    expect(dbPoolerRateLimitUtilizationPercent.set).toHaveBeenCalled();
+    expect(dbPoolerActiveMerchantWindows.set).toHaveBeenCalledWith(1);
+  });
+
+  it("sets the circuit breaker gauge to open (1) once the failure threshold is reached", async () => {
+    // Fallback mode engages at half the circuit-breaker threshold (15) and
+    // then intercepts every subsequent call for 5 minutes, bypassing the
+    // failure-counting path entirely. Worse, the very first failure that
+    // gets through once fallback expires immediately re-arms it for
+    // another 5 minutes (the "failures >= threshold/2" check re-fires on
+    // every failure, not just the first) - so sequentially waiting out
+    // fallback mode and retrying one at a time can never make the counter
+    // progress past 15+1. The only way to actually reach the full
+    // threshold is a concurrent burst: every call's fallback-mode check
+    // runs synchronously before any of them reaches its own catch block to
+    // re-arm it, so a burst fired the instant fallback expires all get
+    // counted before the first one closes the window again.
+    vi.useFakeTimers();
+    mockPoolQuery.mockRejectedValue(new Error("Database connection failed"));
+
+    for (let i = 0; i < 15; i++) {
+      try {
+        await optimizedQuery("SELECT 1", [], { label: "metrics-cb", useCache: false });
+      } catch {
+        // expected
+      }
+    }
+    expect(getPoolerStats().fallbackMode.active).toBe(true);
+
+    vi.advanceTimersByTime(300_001); // past fallback mode's 5-minute duration
+
+    await Promise.allSettled(
+      Array.from({ length: 20 }, () =>
+        optimizedQuery("SELECT 1", [], { label: "metrics-cb", useCache: false }),
+      ),
+    );
+
+    expect(dbPoolerCircuitBreakerState.set).toHaveBeenCalledWith(1);
+    vi.useRealTimers();
+  });
+
+  it("resets the circuit breaker and fallback gauges to 0 via the test reset helper", () => {
+    _resetDbPoolerCircuitBreakerForTests();
+
+    expect(dbPoolerCircuitBreakerState.set).toHaveBeenCalledWith(0);
+    expect(dbPoolerFallbackModeActive.set).toHaveBeenCalledWith(0);
+  });
+
+  it("sets the fallback-mode gauge to active (1) once fallback mode engages", async () => {
+    mockPoolQuery.mockRejectedValue(new Error("Database connection failed"));
+
+    for (let i = 0; i < 15; i++) {
+      try {
+        await optimizedQuery("SELECT 1", [], { label: "metrics-fallback", useCache: false });
+      } catch {
+        // expected
+      }
+    }
+
+    expect(dbPoolerFallbackModeActive.set).toHaveBeenCalledWith(1);
   });
 });

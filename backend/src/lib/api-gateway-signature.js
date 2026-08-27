@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { logger } from "./logger.js";
+import { apiGatewaySignatureCacheSize, apiGatewayReplayBlockedTotal } from "./metrics.js";
 
 const DEFAULT_SIGNATURE_WINDOW_SECONDS = 300;
 // Minimum HMAC secret length to prevent signing with trivially weak keys
@@ -27,11 +28,71 @@ let _circuitBreakerFailures = 0;
 let _circuitBreakerLastFailureTime = 0;
 let _circuitBreakerOpen = false;
 
+// Replay-protection cache (issue #1060): once a signature has been
+// successfully verified it is remembered for the remainder of its
+// timestamp tolerance window, so an attacker who captures a validly signed
+// request in transit cannot replay it verbatim. Keyed on the signature
+// itself (already a per-request HMAC over method+path+timestamp+body, so
+// two distinct requests colliding is cryptographically infeasible).
+// Bounded and self-cleaning, mirroring the rate-limit map's strategy above.
+const _verifiedSignatureCache = new Map(); // signature -> expiresAtMs
+const SIGNATURE_CACHE_CLEANUP_THRESHOLD = 10000;
+
+export { _verifiedSignatureCache };
+
 export function _resetApiGatewayRateLimitStateForTests() {
   _apiGatewayRateLimitState.clear();
   _circuitBreakerFailures = 0;
   _circuitBreakerLastFailureTime = 0;
   _circuitBreakerOpen = false;
+  _verifiedSignatureCache.clear();
+}
+
+function _cleanupExpiredSignatureCacheEntries(now = Date.now()) {
+  if (_verifiedSignatureCache.size <= SIGNATURE_CACHE_CLEANUP_THRESHOLD) {
+    return;
+  }
+
+  let cleaned = 0;
+  for (const [signature, expiresAt] of _verifiedSignatureCache.entries()) {
+    if (now >= expiresAt) {
+      _verifiedSignatureCache.delete(signature);
+      cleaned++;
+    }
+  }
+
+  if (cleaned > 0) {
+    logger.debug({ cleaned, remaining: _verifiedSignatureCache.size }, "Cleaned expired API gateway signature cache entries");
+  }
+}
+
+function _isReplayedSignature(signature, now = Date.now()) {
+  const expiresAt = _verifiedSignatureCache.get(signature);
+  if (expiresAt === undefined) return false;
+  if (now >= expiresAt) {
+    // Expired naturally (its own tolerance window has passed) — no longer a replay risk.
+    _verifiedSignatureCache.delete(signature);
+    return false;
+  }
+  return true;
+}
+
+function _rememberVerifiedSignature(signature, toleranceSeconds, now = Date.now()) {
+  try {
+    _verifiedSignatureCache.set(signature, now + Math.max(toleranceSeconds, 0) * 1000);
+    apiGatewaySignatureCacheSize.set(_verifiedSignatureCache.size);
+    _cleanupExpiredSignatureCacheEntries(now);
+  } catch (err) {
+    logger.warn({ err }, "Failed to record verified API gateway signature for replay protection");
+  }
+}
+
+/**
+ * Inspect the replay-protection cache. Exposed for monitoring/debugging.
+ * @returns {{ size: number }}
+ */
+export function getApiGatewaySignatureCacheStats() {
+  return { size: _verifiedSignatureCache.size };
 }
 
 // Security audit #901: Cleanup stale rate limit entries to prevent memory exhaustion
@@ -191,6 +252,16 @@ function buildCanonicalPayload({ method, path, timestamp, body }) {
   }
 }
 
+// Methods whose signatures are eligible for replay protection. Read-only
+// requests are deliberately excluded: the signature only covers
+// method+path+timestamp+body with 1-second timestamp granularity, so two
+// genuinely distinct GET requests issued within the same second (e.g. a
+// client polling an unchanged query) can legitimately produce an identical
+// signature - indistinguishable from a captured replay. Replay protection
+// is most valuable (and least likely to cause false positives) on
+// state-changing requests, where re-execution has a real side effect.
+const REPLAY_PROTECTED_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 function signaturesEqual(a, b) {
   const aBuf = Buffer.from(a, "hex");
   const bBuf = Buffer.from(b, "hex");
@@ -334,8 +405,6 @@ export function verifyApiGatewayRequestSignature({
       return { valid: false, reason: "Missing or invalid x-api-signature header" };
     }
 
-  return { valid: true };
-}
     const expected = signApiGatewayRequest({
       secret,
       method,
@@ -351,6 +420,26 @@ export function verifyApiGatewayRequestSignature({
       return { valid: false, reason: "Request signature verification failed" };
     }
 
+    // Replay protection (issue #1060): a cryptographically valid signature
+    // that has already been used within its own tolerance window is a
+    // replay of a captured request, not a legitimate second use. Scoped to
+    // state-changing methods only - see REPLAY_PROTECTED_METHODS.
+    const isReplayProtected = REPLAY_PROTECTED_METHODS.has(String(method || "GET").toUpperCase());
+    if (isReplayProtected && _isReplayedSignature(receivedSignature, now)) {
+      recordApiGatewaySignatureAttempt(clientIp, false, now);
+      _recordCircuitBreakerFailure(now);
+      apiGatewayReplayBlockedTotal.inc();
+      logger.warn({ clientIp, method, path }, "Rejected replayed API gateway signature");
+      return {
+        valid: false,
+        reason: "Signature has already been used and cannot be replayed",
+        code: "API_GATEWAY_REPLAY_DETECTED",
+      };
+    }
+
+    if (isReplayProtected) {
+      _rememberVerifiedSignature(receivedSignature, toleranceSeconds, now);
+    }
     recordApiGatewaySignatureAttempt(clientIp, true, now);
     _recordCircuitBreakerSuccess();
     return { valid: true };
