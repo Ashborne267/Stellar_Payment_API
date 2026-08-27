@@ -399,8 +399,8 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                     aria-roledescription="onboarding step"
                     aria-describedby={stepDescId}
                     aria-busy={isPending}
-                    aria-disabled={state.isPending ? "true" : undefined}
-                    disabled={state.isPending}
+                    aria-disabled={isPending || undefined}
+                    disabled={isPending}
                   >
                     <StepIcon
                       completed={step.completed}
