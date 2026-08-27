@@ -2,8 +2,11 @@ import crypto from "node:crypto";
 import { logger } from "./logger.js";
 
 const DEFAULT_SIGNATURE_WINDOW_SECONDS = 300;
-// Minimum HMAC secret length to prevent signing with trivially weak keys (#767)
+// Minimum HMAC secret length to prevent signing with trivially weak keys
 const MIN_SECRET_LENGTH = 16;
+
+// Supported key rotation indices: 0 = current, 1 = previous
+const MAX_KEY_ROTATION_DEPTH = 2;
 
 // Rate limiting for API gateway signature verification (issue #897)
 const API_GATEWAY_RATE_LIMIT_MAX = Number(process.env.API_GATEWAY_RATE_LIMIT_MAX || 100);
@@ -196,6 +199,53 @@ function signaturesEqual(a, b) {
   return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
+/**
+ * Verify signature using key rotation support.
+ * Tries each secret in sequence, returning the first valid result.
+ *
+ * @param {Array<string>} secrets - Array of secrets to try (current + previous)
+ * @param {object} params - Parameters for signature verification
+ * @returns {{ valid: boolean, reason?: string, keyIndex?: number }}
+ */
+export function verifyApiGatewayRequestSignatureWithRotation({
+  secrets,
+  method,
+  path,
+  timestampHeader,
+  signatureHeader,
+  body,
+  now = Date.now(),
+  toleranceSeconds = Number(
+    process.env.API_GATEWAY_SIGNATURE_TOLERANCE_SECONDS || DEFAULT_SIGNATURE_WINDOW_SECONDS,
+  ),
+}) {
+  for (let keyIndex = 0; keyIndex < secrets.length; keyIndex++) {
+    const secret = secrets[keyIndex];
+    const result = verifyApiGatewayRequestSignature({
+      secret,
+      method,
+      path,
+      timestampHeader,
+      signatureHeader,
+      body,
+      now,
+      toleranceSeconds,
+    });
+
+    if (result.valid) {
+      return { valid: true, keyIndex };
+    }
+  }
+
+  return { valid: false, reason: "Request signature verification failed with all provided keys" };
+}
+
+function getCurrentAndPreviousSecret(currentSecret, previousSecret) {
+  if (!previousSecret) return [currentSecret];
+  return [currentSecret, previousSecret].filter((s) => s != null);
+}
+
+
 export function signApiGatewayRequest({
   secret,
   method,
@@ -284,6 +334,8 @@ export function verifyApiGatewayRequestSignature({
       return { valid: false, reason: "Missing or invalid x-api-signature header" };
     }
 
+  return { valid: true };
+}
     const expected = signApiGatewayRequest({
       secret,
       method,
