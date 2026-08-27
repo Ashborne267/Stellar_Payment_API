@@ -287,6 +287,20 @@ export const dbPoolerSignatureVerified = new client.Counter({
 });
 
 /**
+ * API Gateway Security Metrics (Issue #1060 - replay-protection cache)
+ */
+
+export const apiGatewaySignatureCacheSize = new client.Gauge({
+  name: "api_gateway_signature_cache_size",
+  help: "Current number of verified-signature entries held for API gateway replay protection",
+});
+
+export const apiGatewayReplayBlockedTotal = new client.Counter({
+  name: "api_gateway_replay_blocked_total",
+  help: "Total number of API gateway requests rejected as replays of a previously verified signature",
+});
+
+/**
  * Exchange Rate Service Metrics
  */
 
@@ -835,6 +849,8 @@ register.registerMetric(queryCacheSize);
 register.registerMetric(dbPoolerRateLimitExceeded);
 register.registerMetric(dbPoolerQueryTotal);
 register.registerMetric(dbPoolerSignatureVerified);
+register.registerMetric(apiGatewaySignatureCacheSize);
+register.registerMetric(apiGatewayReplayBlockedTotal);
 register.registerMetric(exchangeRateQuoteRequests);
 register.registerMetric(exchangeRateQuoteDuration);
 register.registerMetric(exchangeRateHorizonCalls);
