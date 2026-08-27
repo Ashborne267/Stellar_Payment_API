@@ -181,13 +181,20 @@ const StatusBadge = memo(function StatusBadge({
       ? "bg-pluto-200 text-pluto-900 dark:bg-pluto-800/50 dark:text-pluto-100"
       : "bg-pluto-50 text-pluto-700 dark:bg-pluto-900/20 dark:text-pluto-300 group-hover:bg-pluto-100 dark:group-hover:bg-pluto-900/40";
 
+  const dotClass = completed
+    ? "bg-pluto-600 dark:bg-pluto-300"
+    : isCurrent
+      ? "bg-pluto-700 animate-pulse dark:bg-pluto-100"
+      : "bg-pluto-400 dark:bg-pluto-500";
+
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 font-semibold tracking-wide transition-colors duration-200 ${
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-semibold tracking-wide transition-colors duration-200 ${
         compact ? "text-[0.65rem]" : "text-xs"
       } ${colorClass}`}
       aria-label={label}
     >
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`} aria-hidden="true" />
       {label}
     </span>
   );
@@ -394,7 +401,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       focus:outline-none focus-visible:ring-2
                       focus-visible:ring-pluto-400 focus-visible:ring-offset-2
                       focus-visible:ring-offset-white dark:focus-visible:ring-offset-pluto-950
-                      ${isPending ? "cursor-not-allowed opacity-70" : ""}
+                      ${isPending ? "cursor-not-allowed opacity-70" : "hover:scale-105 active:scale-95"}
                       ${indicatorColorClass}
                     `}
                     aria-label={i18n.stepAriaLabel(index + 1, step.title, step.completed, step.required)}
@@ -458,6 +465,14 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       aria-hidden="true"
                     />
                   )}
+
+                  {/* Horizontal connector */}
+                  {orientation === "horizontal" && index < sortedSteps.length - 1 && (
+                    <div
+                      className={`absolute right-[-0.75rem] hidden h-px w-3 bg-pluto-200 dark:bg-pluto-700 sm:block ${compact ? "top-[1.75rem]" : "top-[2rem]"}`}
+                      aria-hidden="true"
+                    />
+                  )}
                 </MotionLi>
               );
             })}
@@ -469,7 +484,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
         <AnimatePresence>
           {isComplete && sortedSteps.length > 0 && (
             <MotionDiv
-              className="mt-6 rounded-xl border border-pluto-200 bg-pluto-50 p-4 dark:border-pluto-700/60 dark:bg-pluto-900/60"
+              className="mt-6 rounded-xl border border-pluto-200 border-l-4 border-l-pluto-500 bg-pluto-50 p-4 shadow-[0_2px_10px_rgba(74,111,165,0.1)] dark:border-pluto-700/60 dark:border-l-pluto-400 dark:bg-pluto-900/60"
               variants={completionVariants}
               initial="hidden"
               animate="visible"
@@ -480,16 +495,18 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
               data-testid="completion-banner"
             >
               <div className="flex items-start gap-3">
-                <MotionSvg
-                  className="mt-0.5 h-5 w-5 flex-shrink-0 text-pluto-500 dark:text-pluto-300"
-                  fill="currentColor"
-                  viewBox="0 0 20 20"
-                  aria-hidden="true"
-                  animate={prefersReducedMotion ? {} : { scale: [1, 1.2, 1] }}
-                  transition={{ duration: 0.45, delay: 0.25 }}
-                >
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </MotionSvg>
+                <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-pluto-100 dark:bg-pluto-800/60">
+                  <MotionSvg
+                    className="h-5 w-5 text-pluto-600 dark:text-pluto-300"
+                    fill="currentColor"
+                    viewBox="0 0 20 20"
+                    aria-hidden="true"
+                    animate={prefersReducedMotion ? {} : { scale: [1, 1.2, 1] }}
+                    transition={{ duration: 0.45, delay: 0.25 }}
+                  >
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </MotionSvg>
+                </span>
                 <div>
                   <h4 className="font-semibold tracking-tight text-pluto-900 dark:text-pluto-50">{i18n.successTitle}</h4>
                   <p className="mt-1 text-sm leading-relaxed text-pluto-700 dark:text-pluto-300">{i18n.successMessage}</p>
