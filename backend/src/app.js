@@ -20,6 +20,7 @@ import trustlinesRouter from "./routes/trustlines.js";
 import paymentDetailsRouter from "./routes/paymentDetails.js";
 import x402Router from "./routes/x402.js";
 import createAuthRouter from "./routes/auth.js";
+import auditRouter from "./routes/audit.js";
 
 import { requireApiKeyAuth } from "./lib/auth.js";
 import { isHorizonReachable } from "./lib/stellar.js";
@@ -315,6 +316,7 @@ export async function createApp({ redisClient }) {
   app.use("/api", authRouter);
   app.use("/api", metricsRouter);
   app.use("/api", webhooksRouter);
+  app.use("/api", auditRouter);
   app.use("/api/payments", paymentDetailsRouter); // NEW — GET /api/payments/:id
 
   // Transaction Signer — rate-limited signature verification endpoint (#912)
