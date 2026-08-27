@@ -410,6 +410,13 @@ export async function optimizedQuery(
   }
 
   // ── Step 1: Rate limiting check (Issue #758) ─────────────────────────────
+  // Reserve the slot synchronously, in the same tick as the check (issue
+  // #1059 load testing): recording only after the DB call resolved left a
+  // check-then-act race where a concurrent burst could see the pre-query
+  // count for every request and blow straight through the limit before any
+  // of them had a chance to record. Counting the attempt at admission time
+  // (rather than at completion) closes that gap and matches how the
+  // per-request rate limit is meant to behave under concurrency.
   const rateLimitResult = queryRateLimiter.checkLimit(merchantId);
   if (!rateLimitResult.allowed) {
     dbPoolerQueryTotal.inc({ label, status: "rate_limited" });
@@ -418,6 +425,7 @@ export async function optimizedQuery(
     error.code = "DB_POOLER_RATE_LIMITED";
     throw error;
   }
+  queryRateLimiter.recordQuery(merchantId);
 
   // ── Step 2: Signature verification (Issue #759) ──────────────────────────
   if (signature) {
@@ -446,8 +454,6 @@ export async function optimizedQuery(
       { useCache },
     );
 
-    // Record successful query
-    queryRateLimiter.recordQuery(merchantId);
     dbPoolerQueryTotal.inc({ label, status: "success" });
     _recordDbPoolerCircuitBreakerSuccess();
 
