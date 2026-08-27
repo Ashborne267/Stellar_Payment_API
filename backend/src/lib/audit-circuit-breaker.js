@@ -16,12 +16,16 @@ export class AuditCircuitBreaker {
     halfOpenRequired = 2,
     label = "circuit-breaker",
     onClose = null,
+    onOpen = null,
+    onHalfOpen = null,
   } = {}) {
     this.failureThreshold = failureThreshold;
     this.resetTimeoutMs = resetTimeoutMs;
     this.halfOpenRequired = halfOpenRequired;
     this.label = label;
     this.onClose = onClose;
+    this.onOpen = onOpen;
+    this.onHalfOpen = onHalfOpen;
 
     this.state = CircuitState.CLOSED;
     this.failures = 0;
@@ -35,6 +39,9 @@ export class AuditCircuitBreaker {
         this.state = CircuitState.HALF_OPEN;
         this.halfOpenSuccesses = 0;
         console.info(`[${this.label}] Circuit breaker transitioned to HALF_OPEN — allowing trial requests`);
+        if (typeof this.onHalfOpen === "function") {
+          this.onHalfOpen();
+        }
         return false;
       }
       return true;
@@ -70,6 +77,9 @@ export class AuditCircuitBreaker {
       console.warn(
         `[${this.label}] Circuit breaker opened after ${this.failures} failures. DB writes suspended for ${this.resetTimeoutMs}ms.`,
       );
+      if (typeof this.onOpen === "function") {
+        this.onOpen();
+      }
     }
   }
 
