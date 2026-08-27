@@ -252,6 +252,16 @@ function buildCanonicalPayload({ method, path, timestamp, body }) {
   }
 }
 
+// Methods whose signatures are eligible for replay protection. Read-only
+// requests are deliberately excluded: the signature only covers
+// method+path+timestamp+body with 1-second timestamp granularity, so two
+// genuinely distinct GET requests issued within the same second (e.g. a
+// client polling an unchanged query) can legitimately produce an identical
+// signature - indistinguishable from a captured replay. Replay protection
+// is most valuable (and least likely to cause false positives) on
+// state-changing requests, where re-execution has a real side effect.
+const REPLAY_PROTECTED_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 function signaturesEqual(a, b) {
   const aBuf = Buffer.from(a, "hex");
   const bBuf = Buffer.from(b, "hex");
@@ -412,8 +422,10 @@ export function verifyApiGatewayRequestSignature({
 
     // Replay protection (issue #1060): a cryptographically valid signature
     // that has already been used within its own tolerance window is a
-    // replay of a captured request, not a legitimate second use.
-    if (_isReplayedSignature(receivedSignature, now)) {
+    // replay of a captured request, not a legitimate second use. Scoped to
+    // state-changing methods only - see REPLAY_PROTECTED_METHODS.
+    const isReplayProtected = REPLAY_PROTECTED_METHODS.has(String(method || "GET").toUpperCase());
+    if (isReplayProtected && _isReplayedSignature(receivedSignature, now)) {
       recordApiGatewaySignatureAttempt(clientIp, false, now);
       _recordCircuitBreakerFailure(now);
       apiGatewayReplayBlockedTotal.inc();
@@ -425,7 +437,9 @@ export function verifyApiGatewayRequestSignature({
       };
     }
 
-    _rememberVerifiedSignature(receivedSignature, toleranceSeconds, now);
+    if (isReplayProtected) {
+      _rememberVerifiedSignature(receivedSignature, toleranceSeconds, now);
+    }
     recordApiGatewaySignatureAttempt(clientIp, true, now);
     _recordCircuitBreakerSuccess();
     return { valid: true };

@@ -338,14 +338,14 @@ describe("api-gateway-signature", () => {
       const timestamp = 1713916800;
       const signature = signApiGatewayRequest({
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestamp,
         body: {},
       });
       const params = {
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestampHeader: String(timestamp),
         signatureHeader: `sha256=${signature}`,
@@ -361,19 +361,51 @@ describe("api-gateway-signature", () => {
       expect(replay.code).toBe("API_GATEWAY_REPLAY_DETECTED");
     });
 
+    it("does not apply replay protection to read-only GET requests", () => {
+      // GET/HEAD are excluded from replay protection: the signature has
+      // only 1-second timestamp granularity, so two genuinely distinct GET
+      // requests (e.g. a client polling an unchanged query) can legitimately
+      // produce an identical signature. Blocking the second would break
+      // real polling clients for no security benefit, since re-executing a
+      // read has no side effect.
+      const timestamp = 1713916800;
+      const signature = signApiGatewayRequest({
+        secret: VALID_SECRET,
+        method: "GET",
+        path: "/api/metrics/summary",
+        timestamp,
+        body: {},
+      });
+      const params = {
+        secret: VALID_SECRET,
+        method: "GET",
+        path: "/api/metrics/summary",
+        timestampHeader: String(timestamp),
+        signatureHeader: `sha256=${signature}`,
+        body: {},
+        now: timestamp * 1000,
+      };
+
+      const first = verifyApiGatewayRequestSignature(params);
+      const second = verifyApiGatewayRequestSignature(params);
+
+      expect(first).toEqual({ valid: true });
+      expect(second).toEqual({ valid: true });
+    });
+
     it("allows two different requests signed within the same second", () => {
       const timestamp = 1713916800;
       const paramsFor = (path) => {
         const signature = signApiGatewayRequest({
           secret: VALID_SECRET,
-          method: "GET",
+          method: "POST",
           path,
           timestamp,
           body: {},
         });
         return {
           secret: VALID_SECRET,
-          method: "GET",
+          method: "POST",
           path,
           timestampHeader: String(timestamp),
           signatureHeader: `sha256=${signature}`,
@@ -393,7 +425,7 @@ describe("api-gateway-signature", () => {
       const timestamp = 1713916800;
       const signature = signApiGatewayRequest({
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestamp,
         body: {},
@@ -401,7 +433,7 @@ describe("api-gateway-signature", () => {
 
       const first = verifyApiGatewayRequestSignature({
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestampHeader: String(timestamp),
         signatureHeader: `sha256=${signature}`,
@@ -420,7 +452,7 @@ describe("api-gateway-signature", () => {
       _verifiedSignatureCache.set(signature, timestamp * 1000 - 1);
       const stale = verifyApiGatewayRequestSignature({
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestampHeader: String(timestamp),
         signatureHeader: `sha256=${signature}`,
@@ -436,7 +468,7 @@ describe("api-gateway-signature", () => {
     it("does not cache invalid signatures", () => {
       verifyApiGatewayRequestSignature({
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/health",
         timestampHeader: "1713916800",
         signatureHeader: "sha256=" + "a".repeat(64),
@@ -451,14 +483,14 @@ describe("api-gateway-signature", () => {
       const timestamp = 1713916800;
       const signature = signApiGatewayRequest({
         secret: VALID_SECRET,
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestamp,
         body: {},
       });
       const params = {
         secrets: [VALID_SECRET, "previous-secret-also-32-chars-ok"],
-        method: "GET",
+        method: "POST",
         path: "/api/payments",
         timestampHeader: String(timestamp),
         signatureHeader: `sha256=${signature}`,

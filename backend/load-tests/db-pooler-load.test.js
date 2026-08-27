@@ -63,6 +63,11 @@ vi.mock("../src/lib/metrics.js", () => ({
   dbPoolerRateLimitExceeded: { inc: vi.fn() },
   dbPoolerQueryTotal: { inc: vi.fn() },
   dbPoolerSignatureVerified: { inc: vi.fn() },
+  dbPoolerQueryDuration: { observe: vi.fn() },
+  dbPoolerCircuitBreakerState: { set: vi.fn() },
+  dbPoolerFallbackModeActive: { set: vi.fn() },
+  dbPoolerActiveMerchantWindows: { set: vi.fn() },
+  dbPoolerRateLimitUtilizationPercent: { set: vi.fn() },
 }));
 
 vi.mock("../src/lib/logger.js", () => ({
