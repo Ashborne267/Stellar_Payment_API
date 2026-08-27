@@ -19,6 +19,11 @@ import {
   dbPoolerRateLimitExceeded,
   dbPoolerQueryTotal,
   dbPoolerSignatureVerified,
+  dbPoolerQueryDuration,
+  dbPoolerCircuitBreakerState,
+  dbPoolerFallbackModeActive,
+  dbPoolerActiveMerchantWindows,
+  dbPoolerRateLimitUtilizationPercent,
 } from "./metrics.js";
 
 // Error recovery #895: Circuit breaker for database pool failures
@@ -123,6 +128,19 @@ class QueryRateLimiter {
         this.merchantWindows.delete(id);
       }
     }
+    dbPoolerActiveMerchantWindows.set(this.merchantWindows.size);
+  }
+
+  /**
+   * Publish granular gauges for the current rate-limiter state (Issue #1058).
+   * Cardinality-safe: aggregates across merchants rather than labeling by
+   * merchant ID, which would be unbounded.
+   */
+  _publishGauges() {
+    dbPoolerRateLimitUtilizationPercent.set(
+      this.maxQueries > 0 ? (this.globalCount / this.maxQueries) * 100 : 0,
+    );
+    dbPoolerActiveMerchantWindows.set(this.merchantWindows.size);
   }
 
   /**
@@ -133,6 +151,7 @@ class QueryRateLimiter {
    */
   checkLimit(merchantId = null) {
     this._resetGlobalWindowIfNeeded();
+    this._publishGauges();
 
     // Check global limit
     if (this.globalCount >= this.maxQueries) {
@@ -168,6 +187,8 @@ class QueryRateLimiter {
       const merchantWindow = this._getMerchantWindow(merchantId);
       merchantWindow.count++;
     }
+
+    this._publishGauges();
   }
 
   /**
@@ -194,6 +215,8 @@ export function _resetDbPoolerCircuitBreakerForTests() {
   _dbPoolerCircuitBreakerOpen = false;
   _useFallbackMode = false;
   _fallbackModeExpiry = 0;
+  dbPoolerCircuitBreakerState.set(0);
+  dbPoolerFallbackModeActive.set(0);
 }
 
 function _isDbPoolerCircuitBreakerOpen(now = Date.now()) {
@@ -205,6 +228,7 @@ function _isDbPoolerCircuitBreakerOpen(now = Date.now()) {
   if (now - _dbPoolerCircuitBreakerLastFailureTime > DB_POOLER_CIRCUIT_BREAKER_RESET_MS) {
     _dbPoolerCircuitBreakerOpen = false;
     _dbPoolerCircuitBreakerFailures = 0;
+    dbPoolerCircuitBreakerState.set(0);
     logger.info("Database pooler circuit breaker reset");
     return false;
   }
@@ -218,6 +242,7 @@ function _recordDbPoolerCircuitBreakerFailure(now = Date.now()) {
 
   if (_dbPoolerCircuitBreakerFailures >= DB_POOLER_CIRCUIT_BREAKER_THRESHOLD) {
     _dbPoolerCircuitBreakerOpen = true;
+    dbPoolerCircuitBreakerState.set(1);
     logger.error(
       { failures: _dbPoolerCircuitBreakerFailures },
       "Database pooler circuit breaker opened due to repeated failures"
@@ -234,6 +259,7 @@ function _recordDbPoolerCircuitBreakerSuccess() {
 function _enableFallbackMode(durationMs = 300000, now = Date.now()) {
   _useFallbackMode = true;
   _fallbackModeExpiry = now + durationMs;
+  dbPoolerFallbackModeActive.set(1);
   logger.warn({ durationMs }, "Database pooler fallback mode enabled");
 }
 
@@ -245,6 +271,7 @@ function _isFallbackModeActive(now = Date.now()) {
   if (now > _fallbackModeExpiry) {
     _useFallbackMode = false;
     _fallbackModeExpiry = 0;
+    dbPoolerFallbackModeActive.set(0);
     logger.info("Database pooler fallback mode expired");
     return false;
   }
@@ -386,6 +413,11 @@ export async function optimizedQuery(
   } = {},
 ) {
   const now = Date.now();
+  const startedAt = process.hrtime.bigint();
+  const observeDuration = (status) => {
+    const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    dbPoolerQueryDuration.observe({ label, status }, seconds);
+  };
 
   // Error recovery #895: Check if fallback mode is active
   if (_isFallbackModeActive(now)) {
@@ -393,9 +425,11 @@ export async function optimizedQuery(
     try {
       const result = await pool.query(text, values);
       dbPoolerQueryTotal.inc({ label, status: "fallback_success" });
+      observeDuration("fallback_success");
       return result;
     } catch (fallbackErr) {
       dbPoolerQueryTotal.inc({ label, status: "fallback_error" });
+      observeDuration("fallback_error");
       logger.error({ err: fallbackErr, label }, "Fallback mode query execution failed");
       throw fallbackErr;
     }
@@ -413,6 +447,7 @@ export async function optimizedQuery(
   const rateLimitResult = queryRateLimiter.checkLimit(merchantId);
   if (!rateLimitResult.allowed) {
     dbPoolerQueryTotal.inc({ label, status: "rate_limited" });
+    observeDuration("rate_limited");
     const error = new Error(rateLimitResult.reason);
     error.status = 429;
     error.code = "DB_POOLER_RATE_LIMITED";
@@ -425,6 +460,7 @@ export async function optimizedQuery(
     dbPoolerSignatureVerified.inc({ result: isValid ? "valid" : "invalid" });
 
     if (!isValid) {
+      observeDuration("signature_invalid");
       const error = new Error("Query signature verification failed - possible tampering detected");
       error.status = 400;
       error.code = "DB_POOLER_SIGNATURE_INVALID";
@@ -449,11 +485,13 @@ export async function optimizedQuery(
     // Record successful query
     queryRateLimiter.recordQuery(merchantId);
     dbPoolerQueryTotal.inc({ label, status: "success" });
+    observeDuration("success");
     _recordDbPoolerCircuitBreakerSuccess();
 
     return result;
   } catch (err) {
     dbPoolerQueryTotal.inc({ label, status: "error" });
+    observeDuration("error");
     _recordDbPoolerCircuitBreakerFailure(now);
 
     // Error recovery #895: Enable fallback mode on repeated failures
