@@ -301,6 +301,42 @@ export const apiGatewayReplayBlockedTotal = new client.Counter({
 });
 
 /**
+ * Database Pooler Granular Operational Metrics (Issue #1058)
+ *
+ * Complements the coarser dbPoolerQueryTotal counter above with latency
+ * and live-state visibility. Deliberately avoids per-merchant-ID labels
+ * (unbounded cardinality) - merchant-level detail is exposed as an
+ * aggregate window count instead.
+ */
+
+export const dbPoolerQueryDuration = new client.Histogram({
+  name: "db_pooler_query_duration_seconds",
+  help: "Time spent in optimizedQuery/optimizedWrite, including rate-limit and cache overhead",
+  labelNames: ["label", "status"], // success, error, rate_limited, signature_invalid, fallback_success, fallback_error
+  buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
+});
+
+export const dbPoolerCircuitBreakerState = new client.Gauge({
+  name: "db_pooler_circuit_breaker_state",
+  help: "Current state of the database pooler's circuit breaker (0 = closed, 1 = open)",
+});
+
+export const dbPoolerFallbackModeActive = new client.Gauge({
+  name: "db_pooler_fallback_mode_active",
+  help: "Whether the database pooler is currently bypassing rate limiting/caching in fallback mode (0 = no, 1 = yes)",
+});
+
+export const dbPoolerActiveMerchantWindows = new client.Gauge({
+  name: "db_pooler_active_merchant_windows",
+  help: "Current number of merchants with an active rate-limit window tracked by the database pooler",
+});
+
+export const dbPoolerRateLimitUtilizationPercent = new client.Gauge({
+  name: "db_pooler_rate_limit_utilization_percent",
+  help: "Percentage of the global database pooler rate limit currently in use",
+});
+
+/**
  * Exchange Rate Service Metrics
  */
 
@@ -851,6 +887,11 @@ register.registerMetric(dbPoolerQueryTotal);
 register.registerMetric(dbPoolerSignatureVerified);
 register.registerMetric(apiGatewaySignatureCacheSize);
 register.registerMetric(apiGatewayReplayBlockedTotal);
+register.registerMetric(dbPoolerQueryDuration);
+register.registerMetric(dbPoolerCircuitBreakerState);
+register.registerMetric(dbPoolerFallbackModeActive);
+register.registerMetric(dbPoolerActiveMerchantWindows);
+register.registerMetric(dbPoolerRateLimitUtilizationPercent);
 register.registerMetric(exchangeRateQuoteRequests);
 register.registerMetric(exchangeRateQuoteDuration);
 register.registerMetric(exchangeRateHorizonCalls);
