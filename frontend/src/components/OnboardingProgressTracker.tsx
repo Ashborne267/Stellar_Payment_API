@@ -183,7 +183,7 @@ const StatusBadge = memo(function StatusBadge({
 
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2 py-0.5 font-semibold transition-colors duration-200 ${
+      className={`inline-flex items-center rounded-full px-2.5 py-1 font-semibold tracking-wide transition-colors duration-200 ${
         compact ? "text-[0.65rem]" : "text-xs"
       } ${colorClass}`}
       aria-label={label}
@@ -294,9 +294,9 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
         `}
       >
         {/* ── Header ──────────────────────────────────────────────────────── */}
-        <div className="mb-5">
+        <div className="mb-6">
           <div className="flex items-baseline justify-between gap-2">
-            <h2 className={`font-semibold text-pluto-900 dark:text-pluto-50 ${compact ? "text-base" : "text-lg"}`}>
+            <h2 className={`font-semibold tracking-tight text-pluto-900 dark:text-pluto-50 ${compact ? "text-base" : "text-lg"}`}>
               {i18n.title}
             </h2>
             <span className="shrink-0 tabular-nums text-sm font-semibold text-pluto-600 dark:text-pluto-300" aria-hidden="true">
@@ -304,13 +304,13 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
             </span>
           </div>
 
-          <p className={`mt-1 text-[#6B6B6B] dark:text-pluto-400 ${compact ? "text-xs" : "text-sm"}`}>
+          <p className={`mt-1.5 leading-relaxed text-pluto-500 dark:text-pluto-400 ${compact ? "text-xs" : "text-sm"}`}>
             {i18n.subtitle}
           </p>
 
           {/* CSS-animated progress bar — no framer-motion */}
           <div
-            className="mt-3 h-2 overflow-hidden rounded-full bg-pluto-100 dark:bg-pluto-800"
+            className="mt-4 h-2 overflow-hidden rounded-full bg-pluto-100 dark:bg-pluto-800"
             role="progressbar"
             aria-valuenow={progressPercent}
             aria-valuemin={0}
@@ -327,7 +327,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
             />
           </div>
 
-          <p className="mt-1.5 flex items-center gap-1.5 text-xs text-[#6B6B6B] dark:text-pluto-400" aria-hidden="true">
+          <p className="mt-2 flex items-center gap-1.5 text-xs text-pluto-500 dark:text-pluto-400" aria-hidden="true">
             {i18n.stepsCompletedLabel(completedCount, sortedSteps.length)}
             {isComplete && (
               <span className="inline-flex items-center gap-1 font-semibold text-pluto-600 dark:text-pluto-300">
@@ -342,7 +342,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
 
         {/* ── Steps list ───────────────────────────────────────────────────── */}
         <MotionOl
-          className={orientation === "horizontal" ? "flex flex-col gap-3 sm:flex-row sm:gap-2" : "flex flex-col gap-1"}
+          className={orientation === "horizontal" ? "flex flex-col gap-3 sm:flex-row sm:gap-3" : "flex flex-col gap-1.5"}
           role="list"
           aria-label={i18n.stepsList}
           aria-orientation={orientation}
@@ -370,11 +370,11 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   variants={stepVariants}
                   className={`
                     group relative rounded-2xl border border-transparent
-                    px-3 py-2.5 transition-colors duration-200
+                    px-4 py-3 transition-colors duration-200
                     hover:border-pluto-100 hover:bg-white/80
                     dark:hover:border-pluto-800/60 dark:hover:bg-pluto-900/50
                     focus-within:border-pluto-200 dark:focus-within:border-pluto-700
-                    ${orientation === "horizontal" ? "flex flex-1 flex-col gap-2" : "flex flex-row gap-3"}
+                    ${orientation === "horizontal" ? "flex flex-1 flex-col gap-2.5" : "flex flex-row gap-3.5"}
                   `}
                 >
                   {/* Step indicator button */}
@@ -414,11 +414,11 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   </button>
 
                   {/* Step text */}
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <h3
                       id={stepDescId}
                       className={`
-                        font-medium leading-tight transition-colors duration-200
+                        font-medium leading-snug tracking-tight transition-colors duration-200
                         ${step.completed
                           ? "text-pluto-600 line-through dark:text-pluto-400"
                           : "text-pluto-900 dark:text-pluto-50 group-hover:text-pluto-800 dark:group-hover:text-white"}
@@ -433,7 +433,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                       )}
                     </h3>
 
-                    <p className={`leading-snug text-[#6B6B6B] dark:text-pluto-400 transition-colors group-hover:text-pluto-700 dark:group-hover:text-pluto-300 ${compact ? "text-xs" : "text-sm"}`}>
+                    <p className={`leading-relaxed text-pluto-500 dark:text-pluto-400 transition-colors group-hover:text-pluto-700 dark:group-hover:text-pluto-300 ${compact ? "text-xs" : "text-sm"}`}>
                       {step.description}
                     </p>
 
@@ -450,7 +450,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   {/* Vertical connector */}
                   {orientation === "vertical" && index < sortedSteps.length - 1 && (
                     <div
-                      className={`absolute left-[1.4375rem] top-[calc(100%-4px)] ${compact ? "h-2 w-px" : "h-3 w-px"} bg-pluto-200 dark:bg-pluto-700`}
+                      className={`absolute left-[1.6875rem] top-[calc(100%-4px)] ${compact ? "h-2 w-px" : "h-3 w-px"} bg-pluto-200 dark:bg-pluto-700`}
                       aria-hidden="true"
                     />
                   )}
@@ -465,7 +465,7 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
         <AnimatePresence>
           {isComplete && sortedSteps.length > 0 && (
             <MotionDiv
-              className="mt-5 rounded-xl border border-pluto-200 bg-pluto-50 p-4 dark:border-pluto-700/60 dark:bg-pluto-900/60"
+              className="mt-6 rounded-xl border border-pluto-200 bg-pluto-50 p-4 dark:border-pluto-700/60 dark:bg-pluto-900/60"
               variants={completionVariants}
               initial="hidden"
               animate="visible"
@@ -487,8 +487,8 @@ export const OnboardingProgressTracker = memo(function OnboardingProgressTracker
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
                 </MotionSvg>
                 <div>
-                  <h4 className="font-semibold text-pluto-900 dark:text-pluto-50">{i18n.successTitle}</h4>
-                  <p className="mt-0.5 text-sm text-pluto-700 dark:text-pluto-300">{i18n.successMessage}</p>
+                  <h4 className="font-semibold tracking-tight text-pluto-900 dark:text-pluto-50">{i18n.successTitle}</h4>
+                  <p className="mt-1 text-sm leading-relaxed text-pluto-700 dark:text-pluto-300">{i18n.successMessage}</p>
                 </div>
               </div>
             </MotionDiv>
