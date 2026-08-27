@@ -334,8 +334,6 @@ export function verifyApiGatewayRequestSignature({
       return { valid: false, reason: "Missing or invalid x-api-signature header" };
     }
 
-  return { valid: true };
-}
     const expected = signApiGatewayRequest({
       secret,
       method,
